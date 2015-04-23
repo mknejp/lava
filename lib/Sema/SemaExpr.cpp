@@ -12527,6 +12527,7 @@ bool Sema::tryCaptureVariable(VarDecl *Var, SourceLocation ExprLoc,
         case Type::Complex:
         case Type::Vector:
         case Type::ExtVector:
+        case Type::Matrix:
         case Type::Record:
         case Type::Enum:
         case Type::Elaborated:

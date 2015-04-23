@@ -1504,6 +1504,24 @@ TypeInfo ASTContext::getTypeInfoImpl(const Type *T) const {
       Align = TargetVectorAlign;
     break;
   }
+    
+  case Type::Matrix: {
+    const MatrixType *MT = cast<MatrixType>(T);
+    TypeInfo EltInfo = getTypeInfo(MT->getElementType());
+    Width = EltInfo.Width * MT->getNumElements();
+    Align = Width;
+    // If the alignment is not a power of 2, round up to the next power of 2.
+    // This happens for non-power-of-2 length vectors.
+    if (Align & (Align-1)) {
+      Align = llvm::NextPowerOf2(Align);
+      Width = llvm::RoundUpToAlignment(Width, Align);
+    }
+    // Adjust the alignment based on the target max, use same as vector.
+    uint64_t TargetVectorAlign = Target->getMaxVectorAlign();
+    if (TargetVectorAlign && TargetVectorAlign < Align)
+      Align = TargetVectorAlign;
+    break;
+  }
 
   case Type::Builtin:
     switch (cast<BuiltinType>(T)->getKind()) {
@@ -2494,6 +2512,8 @@ QualType ASTContext::getVariableArrayDecayedType(QualType type) const {
   case Type::Vector:
   case Type::ExtVector:
   case Type::DependentSizedExtVector:
+  case Type::Matrix:
+  case Type::DependentSizedMatrix:
   case Type::ObjCObject:
   case Type::ObjCInterface:
   case Type::ObjCObjectPointer:
@@ -2835,6 +2855,83 @@ ASTContext::getDependentSizedExtVectorType(QualType vecType,
     }
   }
 
+  Types.push_back(New);
+  return QualType(New, 0);
+}
+
+/// getMatrixType - Return the unique reference to a graphics shader matrix type
+/// of the specified element type and row/column size.
+/// MatrixType must be a built-in type.
+QualType
+ASTContext::getMatrixType(QualType ElementType, unsigned NumRows,
+                          unsigned NumColumns) const {
+  assert(ElementType->isBuiltinType() || ElementType->isDependentType());
+  
+  // Check if we've already instantiated a matrix of this type.
+  llvm::FoldingSetNodeID ID;
+  MatrixType::Profile(ID, ElementType, NumRows, NumColumns, Type::Matrix);
+  void *InsertPos = nullptr;
+  if (auto *MTP = MatrixTypes.FindNodeOrInsertPos(ID, InsertPos))
+    return QualType(MTP, 0);
+  
+  // If the element type isn't canonical, this won't be a canonical type either,
+  // so fill in the canonical type field.
+  QualType Canonical;
+  if (!ElementType.isCanonical()) {
+    Canonical = getMatrixType(getCanonicalType(ElementType), NumRows,
+                              NumColumns);
+    
+    // Get the new insert position for the node we care about.
+    auto *NewIP = MatrixTypes.FindNodeOrInsertPos(ID, InsertPos);
+    assert(!NewIP && "Shouldn't be in the map!"); (void)NewIP;
+  }
+  auto *New = new (*this, TypeAlignment)
+    MatrixType(ElementType, NumRows, NumColumns, Canonical);
+  MatrixTypes.InsertNode(New, InsertPos);
+  Types.push_back(New);
+  return QualType(New, 0);
+}
+
+QualType
+ASTContext::getDependentSizedMatrixType(QualType ElementType,
+                                        Expr *RowSizeExpr,
+                                        Expr *ColumnSizeExpr,
+                                        SourceLocation AttrLoc) const {
+  llvm::FoldingSetNodeID ID;
+  DependentSizedMatrixType::Profile(ID, *this, getCanonicalType(ElementType),
+                                    RowSizeExpr, ColumnSizeExpr);
+  
+  void *InsertPos = nullptr;
+  auto *Canon = DependentSizedMatrixTypes.FindNodeOrInsertPos(ID, InsertPos);
+  DependentSizedMatrixType *New;
+  if (Canon) {
+    // We already have a canonical version of this matrix type; use it as
+    // the canonical type for a newly-built type.
+    New = new (*this, TypeAlignment)
+      DependentSizedMatrixType(*this, ElementType, QualType(Canon, 0),
+                               RowSizeExpr, ColumnSizeExpr, AttrLoc);
+  } else {
+    QualType CanonMatTy = getCanonicalType(ElementType);
+    if (CanonMatTy == ElementType) {
+      New = new (*this, TypeAlignment)
+        DependentSizedMatrixType(*this, ElementType, QualType(), RowSizeExpr,
+                                 ColumnSizeExpr, AttrLoc);
+      
+      auto *CanonCheck
+        = DependentSizedMatrixTypes.FindNodeOrInsertPos(ID, InsertPos);
+      assert(!CanonCheck && "Dependent-sized matrix canonical type broken");
+      (void)CanonCheck;
+      DependentSizedMatrixTypes.InsertNode(New, InsertPos);
+    } else {
+      QualType Canon = getDependentSizedMatrixType(CanonMatTy, RowSizeExpr,
+                                                   ColumnSizeExpr,
+                                                   SourceLocation());
+      New = new (*this, TypeAlignment)
+        DependentSizedMatrixType(*this, ElementType, Canon, RowSizeExpr,
+                                 ColumnSizeExpr, AttrLoc);
+    }
+  }
+  
   Types.push_back(New);
   return QualType(New, 0);
 }
@@ -5648,6 +5745,13 @@ void ASTContext::getObjCEncodingForTypeImpl(QualType T, std::string& S,
       return;
     }
       
+  case Type::Matrix: {
+    // No encoding available
+    if (NotEncodedT)
+      *NotEncodedT = T;
+    return;
+  }
+
   // We could see an undeduced auto type here during error recovery.
   // Just ignore it.
   case Type::Auto:
@@ -6454,6 +6558,16 @@ static bool areCompatVectorTypes(const VectorType *LHS,
   assert(LHS->isCanonicalUnqualified() && RHS->isCanonicalUnqualified());
   return LHS->getElementType() == RHS->getElementType() &&
          LHS->getNumElements() == RHS->getNumElements();
+}
+
+/// areCompatMatrixTypes - Return true if the two specified matrix types are
+/// compatible.
+static bool areCompatMatrixTypes(const MatrixType *LHS,
+                                 const MatrixType *RHS) {
+  assert(LHS->isCanonicalUnqualified() && RHS->isCanonicalUnqualified());
+  return LHS->getElementType() == RHS->getElementType() &&
+    LHS->getNumRows() == RHS->getNumRows() &&
+    LHS->getNumColumns() == RHS->getNumColumns();
 }
 
 bool ASTContext::areCompatibleVectorTypes(QualType FirstVec,
@@ -7331,6 +7445,11 @@ QualType ASTContext::mergeTypes(QualType LHS, QualType RHS,
     // FIXME: The merged type should be an ExtVector!
     if (areCompatVectorTypes(LHSCan->getAs<VectorType>(),
                              RHSCan->getAs<VectorType>()))
+      return LHS;
+    return QualType();
+  case Type::Matrix:
+    if (areCompatMatrixTypes(LHSCan->getAs<MatrixType>(),
+                             RHSCan->getAs<MatrixType>()))
       return LHS;
     return QualType();
   case Type::ObjCObject: {

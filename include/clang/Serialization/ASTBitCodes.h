@@ -862,7 +862,9 @@ namespace clang {
       /// \brief A DecayedType record.
       TYPE_DECAYED               = 41,
       /// \brief An AdjustedType record.
-      TYPE_ADJUSTED              = 42
+      TYPE_ADJUSTED              = 42,
+      /// \brief A MatrixType record.
+      TYPE_MATRIX                = 43,
     };
 
     /// \brief The type IDs for special types constructed by semantic

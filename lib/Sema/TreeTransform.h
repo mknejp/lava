@@ -772,6 +772,24 @@ public:
                                               Expr *SizeExpr,
                                               SourceLocation AttributeLoc);
 
+  /// \brief Build a new matrix type given the element type and
+  /// number of rows and columns.
+  ///
+  /// By default, performs semantic analysis when building the matrix type.
+  /// Subclasses may override this routine to provide different behavior.
+  QualType RebuildMatrixType(QualType ElementType, unsigned NumRows,
+                             unsigned NumColumns, SourceLocation AttributeLoc);
+  
+  /// \brief Build a new potentially dependently-sized matrix type
+  /// given the element type and number of rows and columns.
+  ///
+  /// By default, performs semantic analysis when building the matrix type.
+  /// Subclasses may override this routine to provide different behavior.
+  QualType RebuildDependentSizedMatrixType(QualType ElementType,
+                                           Expr *RowSizeExpr,
+                                           Expr *ColumnSizeExpr,
+                                           SourceLocation AttributeLoc);
+  
   /// \brief Build a new function type.
   ///
   /// By default, performs semantic analysis when building the function type.
@@ -4320,6 +4338,89 @@ QualType TreeTransform<Derived>::TransformExtVectorType(TypeLocBuilder &TLB,
   ExtVectorTypeLoc NewTL = TLB.push<ExtVectorTypeLoc>(Result);
   NewTL.setNameLoc(TL.getNameLoc());
 
+  return Result;
+}
+
+template<typename Derived>
+QualType TreeTransform<Derived>::TransformDependentSizedMatrixType(
+                                              TypeLocBuilder &TLB,
+                                              DependentSizedMatrixTypeLoc TL) {
+  const DependentSizedMatrixType *T = TL.getTypePtr();
+  
+  // FIXME: matrix locs should be nested
+  QualType ElementType = getDerived().TransformType(T->getElementType());
+  if (ElementType.isNull())
+    return QualType();
+  
+  // Matrix sizes are constant expressions.
+  ExprResult RowSize;
+  ExprResult ColumnSize;
+  {
+    EnterExpressionEvaluationContext Unevaluated(SemaRef,
+                                                 Sema::ConstantEvaluated);
+    
+    RowSize = getDerived().TransformExpr(T->getRowSizeExpr());
+    RowSize = SemaRef.ActOnConstantExpression(RowSize);
+    if (RowSize.isInvalid())
+      return QualType();
+  }
+  {
+    EnterExpressionEvaluationContext Unevaluated(SemaRef,
+                                                 Sema::ConstantEvaluated);
+    
+    ColumnSize = getDerived().TransformExpr(T->getColumnSizeExpr());
+    ColumnSize = SemaRef.ActOnConstantExpression(ColumnSize);
+    if (ColumnSize.isInvalid())
+      return QualType();
+  }
+  QualType Result = TL.getType();
+  if (getDerived().AlwaysRebuild() ||
+      ElementType != T->getElementType() ||
+      RowSize.get() != T->getRowSizeExpr() ||
+      ColumnSize.get() != T->getColumnSizeExpr()) {
+    Result = getDerived().RebuildDependentSizedMatrixType(ElementType,
+                                                          RowSize.get(),
+                                                          ColumnSize.get(),
+                                                          T->getAttributeLoc());
+    if (Result.isNull())
+      return QualType();
+  }
+  
+  // Result might be dependent or not.
+  if (isa<DependentSizedMatrixType>(Result)) {
+    DependentSizedMatrixTypeLoc NewTL
+      = TLB.push<DependentSizedMatrixTypeLoc>(Result);
+    NewTL.setNameLoc(TL.getNameLoc());
+  } else {
+    MatrixTypeLoc NewTL = TLB.push<MatrixTypeLoc>(Result);
+    NewTL.setNameLoc(TL.getNameLoc());
+  }
+  
+  return Result;
+}
+
+template<typename Derived>
+QualType TreeTransform<Derived>::TransformMatrixType(TypeLocBuilder &TLB,
+                                                     MatrixTypeLoc TL) {
+  const MatrixType *T = TL.getTypePtr();
+  QualType ElementType = getDerived().TransformType(T->getElementType());
+  if (ElementType.isNull())
+    return QualType();
+  
+  QualType Result = TL.getType();
+  if (getDerived().AlwaysRebuild() ||
+      ElementType != T->getElementType()) {
+    Result = getDerived().RebuildMatrixType(ElementType,
+                                            T->getNumRows(),
+                                            T->getNumColumns(),
+                                            /*FIXME*/ SourceLocation());
+    if (Result.isNull())
+      return QualType();
+  }
+  
+  MatrixTypeLoc NewTL = TLB.push<MatrixTypeLoc>(Result);
+  NewTL.setNameLoc(TL.getNameLoc());
+  
   return Result;
 }
 
@@ -10456,6 +10557,38 @@ TreeTransform<Derived>::RebuildDependentSizedExtVectorType(QualType ElementType,
                                                            Expr *SizeExpr,
                                                   SourceLocation AttributeLoc) {
   return SemaRef.BuildExtVectorType(ElementType, SizeExpr, AttributeLoc);
+}
+
+template<typename Derived>
+QualType
+TreeTransform<Derived>::RebuildMatrixType(QualType ElementType,
+                                          unsigned NumRows, unsigned NumColumns,
+                                          SourceLocation AttributeLoc)
+{
+  llvm::APInt numRows(SemaRef.Context.getIntWidth(SemaRef.Context.IntTy),
+                      NumRows, true);
+  IntegerLiteral *RowSize
+  = IntegerLiteral::Create(SemaRef.Context, numRows, SemaRef.Context.IntTy,
+                           AttributeLoc);
+
+  llvm::APInt numColumns(SemaRef.Context.getIntWidth(SemaRef.Context.IntTy),
+                         NumColumns, true);
+  IntegerLiteral *ColumnSize
+  = IntegerLiteral::Create(SemaRef.Context, numColumns, SemaRef.Context.IntTy,
+                           AttributeLoc);
+  
+  return SemaRef.BuildMatrixType(ElementType, RowSize, ColumnSize,
+                                 AttributeLoc);
+}
+
+template<typename Derived>
+QualType
+TreeTransform<Derived>::RebuildDependentSizedMatrixType(QualType ElementType,
+                                                        Expr *RowSizeExpr,
+                                                        Expr *ColumnSizeExpr,
+                                                        SourceLocation AttributeLoc) {
+  return SemaRef.BuildMatrixType(ElementType, RowSizeExpr, ColumnSizeExpr,
+                                 AttributeLoc);
 }
 
 template<typename Derived>

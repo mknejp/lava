@@ -105,6 +105,9 @@ class ASTContext : public RefCountedBase<ASTContext> {
   mutable llvm::FoldingSet<DependentSizedExtVectorType>
     DependentSizedExtVectorTypes;
   mutable llvm::FoldingSet<VectorType> VectorTypes;
+  mutable llvm::FoldingSet<DependentSizedMatrixType>
+    DependentSizedMatrixTypes;
+  mutable llvm::FoldingSet<MatrixType> MatrixTypes;
   mutable llvm::FoldingSet<FunctionNoProtoType> FunctionNoProtoTypes;
   mutable llvm::ContextualFoldingSet<FunctionProtoType, ASTContext&>
     FunctionProtoTypes;
@@ -1067,6 +1070,23 @@ public:
                                           Expr *SizeExpr,
                                           SourceLocation AttrLoc) const;
 
+  /// \brief Return the unique reference to a graphics shader matrix type
+  /// of the specified element type and row/column size.
+  ///
+  /// \pre \p MatrixType must be a built-in type.
+  QualType getMatrixType(QualType ElementType, unsigned NumRows,
+                         unsigned NumColumns) const;
+  
+  /// \pre Return a non-unique reference to the type for a dependently-sized
+  /// graphics shader matrix of the specified element type and row/column size.
+  ///
+  /// FIXME: We will need these to be uniqued, or at least comparable, at some
+  /// point.
+  QualType getDependentSizedMatrixType(QualType ElementType,
+                                       Expr *RowSizeExpr,
+                                       Expr *ColumnSizeExpr,
+                                       SourceLocation AttrLoc) const;
+  
   /// \brief Return a K&R style C function type like 'int()'.
   QualType getFunctionNoProtoType(QualType ResultTy,
                                   const FunctionType::ExtInfo &Info) const;

@@ -214,6 +214,8 @@ bool TypePrinter::canPrefixQualifiers(const Type *T,
     case Type::DependentSizedExtVector:
     case Type::Vector:
     case Type::ExtVector:
+    case Type::DependentSizedMatrix:
+    case Type::Matrix:
     case Type::FunctionProto:
     case Type::FunctionNoProto:
     case Type::Paren:
@@ -530,7 +532,25 @@ void TypePrinter::printDependentSizedExtVectorAfter(
   printAfter(T->getElementType(), OS);
 }
 
-void TypePrinter::printVectorBefore(const VectorType *T, raw_ostream &OS) { 
+void TypePrinter::printDependentSizedMatrixBefore(
+                                             const DependentSizedMatrixType *T,
+                                             raw_ostream &OS) {
+  printBefore(T->getElementType(), OS);
+}
+void TypePrinter::printDependentSizedMatrixAfter(
+                                              const DependentSizedMatrixType *T,
+                                              raw_ostream &OS) {
+  OS << " __attribute__((matrix_type(";
+  if (T->getRowSizeExpr())
+    T->getRowSizeExpr()->printPretty(OS, nullptr, Policy);
+  OS << ",";
+  if (T->getColumnSizeExpr())
+    T->getColumnSizeExpr()->printPretty(OS, nullptr, Policy);
+  OS << ")))";
+  printAfter(T->getElementType(), OS);
+}
+
+void TypePrinter::printVectorBefore(const VectorType *T, raw_ostream &OS) {
   switch (T->getVectorKind()) {
   case VectorType::AltiVecPixel:
     OS << "__vector __pixel ";
@@ -581,7 +601,19 @@ void TypePrinter::printExtVectorAfter(const ExtVectorType *T, raw_ostream &OS) {
   OS << ")))";
 }
 
-void 
+void TypePrinter::printMatrixBefore(const MatrixType *T, raw_ostream &OS) {
+  printBefore(T->getElementType(), OS);
+}
+void TypePrinter::printMatrixAfter(const MatrixType *T, raw_ostream &OS) {
+  printAfter(T->getElementType(), OS);
+  OS << " __attribute__((matrix_type(";
+  OS << T->getNumRows();
+  OS << ",";
+  OS << T->getNumColumns();
+  OS << ")))";
+}
+
+void
 FunctionProtoType::printExceptionSpecification(raw_ostream &OS, 
                                                const PrintingPolicy &Policy)
                                                                          const {

@@ -473,6 +473,8 @@ llvm::Type *CodeGenTypes::ConvertType(QualType T) {
                                        VT->getNumElements());
     break;
   }
+  case Type::Matrix:
+      llvm_unreachable("Matrix code generation not implemented");
   case Type::FunctionNoProto:
   case Type::FunctionProto: {
     const FunctionType *FT = cast<FunctionType>(Ty);

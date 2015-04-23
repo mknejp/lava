@@ -5325,6 +5325,18 @@ QualType ASTReader::readTypeRecord(unsigned Index) {
     return Context.getExtVectorType(ElementType, NumElements);
   }
 
+  case TYPE_MATRIX: {
+    if (Record.size() != 3) {
+      Error("incorrect encoding of matrix type in AST file");
+      return QualType();
+    }
+    
+    QualType ElementType = readType(*Loc.F, Record, Idx);
+    unsigned NumRows = Record[1];
+    unsigned NumColumns = Record[2];
+    return Context.getMatrixType(ElementType, NumRows, NumColumns);
+  }
+    
   case TYPE_FUNCTION_NO_PROTO: {
     if (Record.size() != 6) {
       Error("incorrect encoding of no-proto function type");
@@ -5756,6 +5768,13 @@ void TypeLocReader::VisitFunctionTypeLoc(FunctionTypeLoc TL) {
   for (unsigned i = 0, e = TL.getNumParams(); i != e; ++i) {
     TL.setParam(i, ReadDeclAs<ParmVarDecl>(Record, Idx));
   }
+}
+void TypeLocReader::VisitDependentSizedMatrixTypeLoc(
+                                             DependentSizedMatrixTypeLoc TL) {
+  TL.setNameLoc(ReadSourceLocation(Record, Idx));
+}
+void TypeLocReader::VisitMatrixTypeLoc(MatrixTypeLoc TL) {
+  TL.setNameLoc(ReadSourceLocation(Record, Idx));
 }
 void TypeLocReader::VisitFunctionProtoTypeLoc(FunctionProtoTypeLoc TL) {
   VisitFunctionTypeLoc(TL);

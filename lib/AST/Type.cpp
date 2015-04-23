@@ -168,6 +168,57 @@ DependentSizedExtVectorType::Profile(llvm::FoldingSetNodeID &ID,
   SizeExpr->Profile(ID, Context, true);
 }
 
+MatrixType::MatrixType(QualType elementType, unsigned nRows, unsigned nColumns,
+                       QualType canonType)
+  : Type(Matrix, canonType, elementType->isDependentType(),
+         elementType->isInstantiationDependentType(),
+         elementType->isVariablyModifiedType(),
+         elementType->containsUnexpandedParameterPack()),
+    ElementType(elementType)
+{
+  MatrixTypeBits.NumRows = nRows;
+  MatrixTypeBits.NumColumns = nColumns;
+}
+
+MatrixType::MatrixType(TypeClass tc, QualType elementType, unsigned nRows,
+                       unsigned nColumns, QualType canonType)
+  : Type(tc, canonType, elementType->isDependentType(),
+         elementType->isInstantiationDependentType(),
+         elementType->isVariablyModifiedType(),
+         elementType->containsUnexpandedParameterPack()),
+    ElementType(elementType)
+{
+  MatrixTypeBits.NumRows = nRows;
+  MatrixTypeBits.NumColumns = nColumns;
+}
+
+DependentSizedMatrixType::DependentSizedMatrixType(const ASTContext &Context,
+                                                   QualType ElementType,
+                                                   QualType can,
+                                                   Expr *RowSizeExpr,
+                                                   Expr *ColumnSizeExpr,
+                                                   SourceLocation loc)
+: Type(DependentSizedMatrix, can, /*Dependent=*/true,
+       /*InstantiationDependent=*/true,
+       ElementType->isVariablyModifiedType(),
+       (ElementType->containsUnexpandedParameterPack() ||
+        (RowSizeExpr && RowSizeExpr->containsUnexpandedParameterPack()) ||
+        (ColumnSizeExpr && ColumnSizeExpr->containsUnexpandedParameterPack()))),
+Context(Context), RowSizeExpr(RowSizeExpr), ColumnSizeExpr(ColumnSizeExpr),
+ElementType(ElementType), loc(loc)
+{
+}
+
+void
+DependentSizedMatrixType::Profile(llvm::FoldingSetNodeID &ID,
+                                  const ASTContext &Context,
+                                  QualType ElementType, Expr *RowSizeExpr,
+                                  Expr *ColumnSizeExpr) {
+  ID.AddPointer(ElementType.getAsOpaquePtr());
+  RowSizeExpr->Profile(ID, Context, true);
+  ColumnSizeExpr->Profile(ID, Context, true);
+}
+
 VectorType::VectorType(QualType vecType, unsigned nElements, QualType canonType,
                        VectorKind vecKind)
   : Type(Vector, canonType, vecType->isDependentType(),
@@ -614,6 +665,8 @@ AutoType *Type::getContainedAutoType() const {
 bool Type::hasIntegerRepresentation() const {
   if (const VectorType *VT = dyn_cast<VectorType>(CanonicalType))
     return VT->getElementType()->isIntegerType();
+  else if (const MatrixType *MT = dyn_cast<MatrixType>(CanonicalType))
+    return MT->getElementType()->isIntegerType();
   else
     return isIntegerType();
 }
@@ -806,6 +859,8 @@ bool Type::isFloatingType() const {
 bool Type::hasFloatingRepresentation() const {
   if (const VectorType *VT = dyn_cast<VectorType>(CanonicalType))
     return VT->getElementType()->isFloatingType();
+  else if (const MatrixType *MT = dyn_cast<MatrixType>(CanonicalType))
+    return MT->getElementType()->isFloatingType();
   else
     return isFloatingType();
 }
@@ -2220,6 +2275,8 @@ static CachedProperties computeCachedProperties(const Type *T) {
   case Type::Vector:
   case Type::ExtVector:
     return Cache::get(cast<VectorType>(T)->getElementType());
+  case Type::Matrix:
+    return Cache::get(cast<MatrixType>(T)->getElementType());
   case Type::FunctionNoProto:
     return Cache::get(cast<FunctionType>(T)->getReturnType());
   case Type::FunctionProto: {
@@ -2304,6 +2361,8 @@ static LinkageInfo computeLinkageInfo(const Type *T) {
   case Type::Vector:
   case Type::ExtVector:
     return computeLinkageInfo(cast<VectorType>(T)->getElementType());
+  case Type::Matrix:
+    return computeLinkageInfo(cast<MatrixType>(T)->getElementType());
   case Type::FunctionNoProto:
     return computeLinkageInfo(cast<FunctionType>(T)->getReturnType());
   case Type::FunctionProto: {

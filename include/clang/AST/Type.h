@@ -1340,6 +1340,25 @@ protected:
     enum { MaxNumElements = (1 << (29 - NumTypeBits)) - 1 };
   };
 
+  class MatrixTypeBitfields {
+    friend class MatrixType;
+    
+    unsigned : NumTypeBits;
+    
+    enum { DimensionBits = (32 - NumTypeBits) / 2 };
+    
+    /// NumColumns - The number of columns in the matrix.
+    unsigned NumColumns : DimensionBits;
+    /// NumRows - The number of rows in the matrix.
+    unsigned NumRows : DimensionBits;
+    
+    enum {
+      MaxNumRows = (1 << DimensionBits) - 1,
+      MaxNumColumns = (1 << DimensionBits) - 1,
+      MaxNumElements = MaxNumRows * MaxNumColumns
+    };
+  };
+  
   class AttributedTypeBitfields {
     friend class AttributedType;
 
@@ -1369,6 +1388,7 @@ protected:
     ReferenceTypeBitfields ReferenceTypeBits;
     TypeWithKeywordBitfields TypeWithKeywordBits;
     VectorTypeBitfields VectorTypeBits;
+    MatrixTypeBitfields MatrixTypeBits;
   };
 
 private:
@@ -1570,6 +1590,7 @@ public:
   bool isComplexIntegerType() const;            // GCC _Complex integer type.
   bool isVectorType() const;                    // GCC vector type.
   bool isExtVectorType() const;                 // Extended vector type.
+  bool isMatrixType() const;                    // Graphics shdader matrix type.
   bool isObjCObjectPointerType() const;         // pointer to ObjC object
   bool isObjCRetainableType() const;            // ObjC object or block pointer
   bool isObjCLifetimeType() const;              // (array of)* retainable type
@@ -2561,7 +2582,6 @@ public:
                       QualType ElementType, Expr *SizeExpr);
 };
 
-
 /// VectorType - GCC generic vector type. This type is created using
 /// __attribute__((vector_size(n)), where "n" specifies the vector size in
 /// bytes; or from an Altivec __vector or vector declaration.
@@ -2684,6 +2704,109 @@ public:
 
   static bool classof(const Type *T) {
     return T->getTypeClass() == ExtVector;
+  }
+};
+
+/// DependentSizedMatrixType - This type represent a GLSL-based matrix type
+/// where either the type, column szie or row size is dependent. For example:
+/// @code
+/// template<typename T, int Rows, int Columns>
+/// class matrix {
+///   typedef T __attribute__((matrix_type(Rows, Columns))) type;
+/// }
+/// @endcode
+class DependentSizedMatrixType : public Type, public llvm::FoldingSetNode {
+  const ASTContext &Context;
+  Expr *RowSizeExpr;
+  Expr *ColumnSizeExpr;
+  /// ElementType - The element type of the matrix.
+  QualType ElementType;
+  SourceLocation loc;
+  
+  DependentSizedMatrixType(const ASTContext &Context, QualType ElementType,
+                           QualType can, Expr *RowSizeExpr,
+                           Expr *ColumnSizeExpr, SourceLocation loc);
+  
+  friend class ASTContext;
+  
+public:
+  Expr *getRowSizeExpr() const { return RowSizeExpr; }
+  Expr *getColumnSizeExpr() const { return ColumnSizeExpr; }
+  QualType getElementType() const { return ElementType; }
+  SourceLocation getAttributeLoc() const { return loc; }
+  
+  bool isSugared() const { return false; }
+  QualType desugar() const { return QualType(this, 0); }
+  
+  static bool classof(const Type *T) {
+    return T->getTypeClass() == DependentSizedMatrix;
+  }
+  
+  void Profile(llvm::FoldingSetNodeID &ID) {
+    Profile(ID, Context, getElementType(), getRowSizeExpr(),
+            getColumnSizeExpr());
+  }
+  
+  static void Profile(llvm::FoldingSetNodeID &ID, const ASTContext &Context,
+                      QualType ElementType, Expr *RowSizeExpr,
+                      Expr *ColumnSizeExpr);
+};
+
+/// MatrixType - Graphics shader matrix type (losely modeled after OpenGL
+/// Shading Language). This type is created using
+/// __attribute__((matrix_type(m, n)), where "m" is the number of
+/// rows and "n" the number of columns, as is convention in mathematics.
+/// matrix_type is only allowed on typedefs. This class enables syntactic
+/// extensions, like accessors for column or row vectors, matrix-matrix,
+/// matrix-vector and matrix-scalar operators.
+/// FIXME: This is currently only a syntactic type, no code generation supported.
+class MatrixType : public Type, public llvm::FoldingSetNode {
+protected:
+  /// ElementType - The element type of the vector.
+  QualType ElementType;
+  
+  MatrixType(QualType elementType, unsigned nRows, unsigned nColumns,
+             QualType canonType);
+  
+  MatrixType(TypeClass tc, QualType elementType, unsigned nRows,
+             unsigned nColumns, QualType canonType);
+  
+  friend class ASTContext;  // ASTContext creates these.
+  
+public:
+  
+  QualType getElementType() const { return ElementType; }
+  unsigned getNumRows() const { return MatrixTypeBits.NumRows; }
+  unsigned getNumColumns() const { return MatrixTypeBits.NumColumns; }
+  unsigned getNumElements() const { return getNumRows() * getNumColumns(); }
+  static bool isMatrixRowSizeTooLarge(unsigned NumRows) {
+    return NumRows > MatrixTypeBitfields::MaxNumRows;
+  }
+  static bool isMatrixColumnSizeTooLarge(unsigned NumColumns) {
+    return NumColumns > MatrixTypeBitfields::MaxNumColumns;
+  }
+  static bool isMatrixSizeTooLarge(unsigned NumElements) {
+    return NumElements > MatrixTypeBitfields::MaxNumElements;
+  }
+  
+  bool isSugared() const { return false; }
+  QualType desugar() const { return QualType(this, 0); }
+  
+  void Profile(llvm::FoldingSetNodeID &ID) {
+    Profile(ID, getElementType(), getNumRows(), getNumColumns(),
+            getTypeClass());
+  }
+  static void Profile(llvm::FoldingSetNodeID &ID, QualType ElementType,
+                      unsigned NumRows, unsigned NumColumns,
+                      TypeClass TypeClass) {
+    ID.AddPointer(ElementType.getAsOpaquePtr());
+    ID.AddInteger(NumRows);
+    ID.AddInteger(NumColumns);
+    ID.AddInteger(TypeClass);
+  }
+  
+  static bool classof(const Type *T) {
+    return T->getTypeClass() == Matrix;
   }
 };
 
@@ -5000,6 +5123,9 @@ inline bool Type::isVectorType() const {
 }
 inline bool Type::isExtVectorType() const {
   return isa<ExtVectorType>(CanonicalType);
+}
+inline bool Type::isMatrixType() const {
+  return isa<MatrixType>(CanonicalType);
 }
 inline bool Type::isObjCObjectPointerType() const {
   return isa<ObjCObjectPointerType>(CanonicalType);

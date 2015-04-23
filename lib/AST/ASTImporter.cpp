@@ -533,6 +533,37 @@ static bool IsStructurallyEquivalent(StructuralEquivalenceContext &Context,
     break;
   }
 
+  case Type::DependentSizedMatrix: {
+    const auto *Mat1 = cast<DependentSizedMatrixType>(T1);
+    const auto *Mat2 = cast<DependentSizedMatrixType>(T2);
+    if (!IsStructurallyEquivalent(Context,
+                                  Mat1->getRowSizeExpr(),
+                                  Mat2->getRowSizeExpr()))
+      return false;
+    if (!IsStructurallyEquivalent(Context,
+                                  Mat1->getColumnSizeExpr(),
+                                  Mat2->getColumnSizeExpr()))
+      return false;
+    if (!IsStructurallyEquivalent(Context,
+                                  Mat1->getElementType(),
+                                  Mat2->getElementType()))
+      return false;
+    break;
+  }
+    
+  case Type::Matrix: {
+    const auto *Mat1 = cast<MatrixType>(T1);
+    const auto *Mat2 = cast<MatrixType>(T2);
+    if (!IsStructurallyEquivalent(Context,
+                                  Mat1->getElementType(),
+                                  Mat2->getElementType()))
+      return false;
+    if (Mat1->getNumRows() != Mat2->getNumRows() ||
+        Mat1->getNumColumns() != Mat2->getNumColumns())
+      return false;
+    break;
+  }
+
   case Type::FunctionProto: {
     const FunctionProtoType *Proto1 = cast<FunctionProtoType>(T1);
     const FunctionProtoType *Proto2 = cast<FunctionProtoType>(T2);

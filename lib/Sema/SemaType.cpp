@@ -1739,6 +1739,73 @@ QualType Sema::BuildExtVectorType(QualType T, Expr *ArraySize,
   return Context.getDependentSizedExtVectorType(T, ArraySize, AttrLoc);
 }
 
+/// \brief Build a graphics shader matrix type.
+///
+/// Run the required checks for the matrix type.
+QualType Sema::BuildMatrixType(QualType T, Expr *RowSize, Expr *ColumnSize,
+                               SourceLocation AttrLoc) {
+  // Just like ext_vector_type attribute, we do not allow matrices to be defined
+  // in conjunction with complex types (pointers, arrays, functions, etc.).
+  // Unlike ext_vector_type attribute we only support floating types for
+  // graphics shader matrices.
+  if (!T->isDependentType() &&
+      !T->isRealFloatingType()) {
+    Diag(AttrLoc, diag::err_attribute_invalid_matrix_type) << T;
+    return QualType();
+  }
+  
+  if (!RowSize->isTypeDependent() && !RowSize->isValueDependent() &&
+      !ColumnSize->isTypeDependent() && !ColumnSize->isValueDependent()) {
+    llvm::APSInt rowSize(32);
+    llvm::APSInt columnSize(32);
+    if (!RowSize->isIntegerConstantExpr(rowSize, Context)) {
+      Diag(AttrLoc, diag::err_attribute_argument_type)
+        << "matrix_type" << AANT_ArgumentIntegerConstant
+        << RowSize->getSourceRange();
+      return QualType();
+    }
+    if (!ColumnSize->isIntegerConstantExpr(columnSize, Context)) {
+      Diag(AttrLoc, diag::err_attribute_argument_type)
+        << "matrix_type" << AANT_ArgumentIntegerConstant
+        << ColumnSize->getSourceRange();
+      return QualType();
+    }
+    
+    // Like the ext_vector_type attribute, the size is specified as the
+    // number of elements, not the number of bytes.
+    unsigned numRows = static_cast<unsigned>(rowSize.getZExtValue());
+    unsigned numColumns = static_cast<unsigned>(columnSize.getZExtValue());
+    
+    if (numRows == 0) {
+      Diag(AttrLoc, diag::err_attribute_zero_size)
+      << RowSize->getSourceRange();
+      return QualType();
+    }
+    
+    if (numColumns == 0) {
+      Diag(AttrLoc, diag::err_attribute_zero_size)
+        << ColumnSize->getSourceRange();
+      return QualType();
+    }
+    
+    if (MatrixType::isMatrixRowSizeTooLarge(numRows)) {
+      Diag(AttrLoc, diag::err_attribute_size_too_large)
+        << RowSize->getSourceRange();
+      return QualType();
+    }
+    
+    if (MatrixType::isMatrixColumnSizeTooLarge(numColumns)) {
+      Diag(AttrLoc, diag::err_attribute_size_too_large)
+        << ColumnSize->getSourceRange();
+      return QualType();
+    }
+    
+    return Context.getMatrixType(T, numRows, numColumns);
+  }
+  
+  return Context.getDependentSizedMatrixType(T, RowSize, ColumnSize, AttrLoc);
+}
+
 bool Sema::CheckFunctionReturnType(QualType T, SourceLocation Loc) {
   if (T->isArrayType() || T->isFunctionType()) {
     Diag(Loc, diag::err_func_returning_array_function)

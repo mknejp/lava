@@ -2453,6 +2453,9 @@ void ItaniumRTTIBuilder::BuildVTablePointer(const Type *Ty) {
     // abi::__fundamental_type_info.
     VTableName = "_ZTVN10__cxxabiv123__fundamental_type_infoE";
     break;
+      
+  case Type::Matrix:
+    llvm_unreachable("Matrix code generation not implemented");
 
   case Type::ConstantArray:
   case Type::IncompleteArray:
@@ -2652,6 +2655,9 @@ llvm::Constant *ItaniumRTTIBuilder::BuildTypeInfo(QualType Ty, bool Force) {
     // Itanium C++ ABI 2.9.5p4:
     // abi::__fundamental_type_info adds no data members to std::type_info.
     break;
+
+  case Type::Matrix:
+    llvm_unreachable("Matrix code generation not implemented");
 
   case Type::LValueReference:
   case Type::RValueReference:

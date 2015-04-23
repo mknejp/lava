@@ -1619,6 +1619,116 @@ DeduceTemplateArgumentsByTypeMatch(Sema &S,
       return Sema::TDK_NonDeducedMismatch;
     }
       
+    //     (Lava extension)
+    //
+    //     T __attribute__(((matrix_type(<integral constant>,
+    //                                   <integral constant>))))
+    case Type::Matrix: {
+      const MatrixType *MatrixParam = cast<MatrixType>(Param);
+      if (const auto *MatrixArg = dyn_cast<MatrixType>(Arg)) {
+        // Make sure that the matrices have the same number of rows and columns.
+        if (MatrixParam->getNumRows() != MatrixArg->getNumRows() ||
+            MatrixParam->getNumColumns() != MatrixArg->getNumColumns())
+          return Sema::TDK_NonDeducedMismatch;
+        
+        // Perform deduction on the element types.
+        return DeduceTemplateArgumentsByTypeMatch(S, TemplateParams,
+                                                  MatrixParam->getElementType(),
+                                                  MatrixArg->getElementType(),
+                                                  Info, Deduced, TDF);
+      }
+      
+      if (const auto *MatrixArg = dyn_cast<DependentSizedMatrixType>(Arg)) {
+        // We can't check the number of elements, since the argument has a
+        // dependent number of elements. This can only occur during partial
+        // ordering.
+        
+        // Perform deduction on the element types.
+        return DeduceTemplateArgumentsByTypeMatch(S, TemplateParams,
+                                                  MatrixParam->getElementType(),
+                                                  MatrixArg->getElementType(),
+                                                  Info, Deduced, TDF);
+      }
+      
+      return Sema::TDK_NonDeducedMismatch;
+    }
+      
+    //     (Lava extension)
+    //
+    //     T __attribute__(((matrix_type(M, N))))
+    case Type::DependentSizedMatrix: {
+      const DependentSizedMatrixType *MatrixParam
+        = cast<DependentSizedMatrixType>(Param);
+      
+      if (const auto *MatrixArg = dyn_cast<MatrixType>(Arg)) {
+        // Perform deduction on the element types.
+        if (Sema::TemplateDeductionResult Result
+            = DeduceTemplateArgumentsByTypeMatch(S, TemplateParams,
+                                                 MatrixParam->getElementType(),
+                                                 MatrixArg->getElementType(),
+                                                 Info, Deduced, TDF))
+          return Result;
+        
+        // Perform deduction on the matrix row size, if we can.
+        NonTypeTemplateParmDecl *RowNTTP
+          = getDeducedParameterFromExpr(MatrixParam->getRowSizeExpr());
+        if (!RowNTTP)
+          return Sema::TDK_Success;
+        
+        llvm::APSInt RowSize(S.Context.getTypeSize(S.Context.IntTy), false);
+        RowSize = MatrixArg->getNumRows();
+        if(auto Result = DeduceNonTypeTemplateArgument(S, RowNTTP, RowSize,
+                                                       S.Context.IntTy,
+                                                       false, Info, Deduced))
+          return Result;
+        
+        // Perform deduction on the matrix column size, if we can.
+        NonTypeTemplateParmDecl *ColumnNTTP
+          = getDeducedParameterFromExpr(MatrixParam->getColumnSizeExpr());
+        if (!ColumnNTTP)
+          return Sema::TDK_Success;
+        
+        llvm::APSInt ColumnSize(S.Context.getTypeSize(S.Context.IntTy), false);
+        ColumnSize = MatrixArg->getNumColumns();
+        return DeduceNonTypeTemplateArgument(S, ColumnNTTP, ColumnSize,
+                                             S.Context.IntTy, false, Info,
+                                             Deduced);
+      }
+      
+      if (const auto *MatrixArg = dyn_cast<DependentSizedMatrixType>(Arg)) {
+        // Perform deduction on the element types.
+        if (Sema::TemplateDeductionResult Result
+            = DeduceTemplateArgumentsByTypeMatch(S, TemplateParams,
+                                                 MatrixParam->getElementType(),
+                                                 MatrixArg->getElementType(),
+                                                 Info, Deduced, TDF))
+          return Result;
+        
+        // Perform deduction on the matrix row size, if we can.
+        NonTypeTemplateParmDecl *RowNTTP
+          = getDeducedParameterFromExpr(MatrixParam->getRowSizeExpr());
+        if (!RowNTTP)
+          return Sema::TDK_Success;
+        
+        if(auto Result = DeduceNonTypeTemplateArgument(S, RowNTTP,
+                                                   MatrixArg->getRowSizeExpr(),
+                                                   Info, Deduced))
+          return Result;
+
+        // Perform deduction on the matrix column size, if we can.
+        NonTypeTemplateParmDecl *ColumnNTTP
+          = getDeducedParameterFromExpr(MatrixParam->getColumnSizeExpr());
+        if (!ColumnNTTP)
+          return Sema::TDK_Success;
+        
+        return DeduceNonTypeTemplateArgument(S, ColumnNTTP,
+                                             MatrixArg->getColumnSizeExpr(),
+                                             Info, Deduced);
+      }
+      
+      return Sema::TDK_NonDeducedMismatch;
+    }
+      
     //     (clang extension)
     //
     //     T __attribute__(((ext_vector_type(N))))
@@ -4849,7 +4959,24 @@ MarkUsedTemplateParameters(ASTContext &Ctx, QualType T,
                                Depth, Used);
     break;
   }
+      
+  case Type::Matrix:
+      MarkUsedTemplateParameters(Ctx,
+                                 cast<MatrixType>(T)->getElementType(),
+                                 OnlyDeduced, Depth, Used);
+      break;
 
+  case Type::DependentSizedMatrix: {
+    const auto *MatType = cast<DependentSizedMatrixType>(T);
+    MarkUsedTemplateParameters(Ctx, MatType->getElementType(), OnlyDeduced,
+                               Depth, Used);
+    MarkUsedTemplateParameters(Ctx, MatType->getRowSizeExpr(), OnlyDeduced,
+                               Depth, Used);
+    MarkUsedTemplateParameters(Ctx, MatType->getColumnSizeExpr(), OnlyDeduced,
+                               Depth, Used);
+    break;
+  }
+    
   case Type::FunctionProto: {
     const FunctionProtoType *Proto = cast<FunctionProtoType>(T);
     MarkUsedTemplateParameters(Ctx, Proto->getReturnType(), OnlyDeduced, Depth,

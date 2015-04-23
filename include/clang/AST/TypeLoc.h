@@ -1479,6 +1479,20 @@ class DependentSizedExtVectorTypeLoc :
                                      DependentSizedExtVectorType> {
 };
 
+// FIXME: size expression and attribute locations.
+class MatrixTypeLoc : public InheritingConcreteTypeLoc<TypeSpecTypeLoc,
+                                                       MatrixTypeLoc,
+                                                       MatrixType> {
+};
+  
+// FIXME: attribute locations.
+// For some reason, this isn't a subtype of MatrixType.
+class DependentSizedMatrixTypeLoc :
+    public InheritingConcreteTypeLoc<TypeSpecTypeLoc,
+                                     DependentSizedMatrixTypeLoc,
+                                     DependentSizedMatrixType> {
+};
+  
 // FIXME: location of the '_Complex' keyword.
 class ComplexTypeLoc : public InheritingConcreteTypeLoc<TypeSpecTypeLoc,
                                                         ComplexTypeLoc,

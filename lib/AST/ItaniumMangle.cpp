@@ -867,6 +867,8 @@ void CXXNameMangler::mangleUnresolvedPrefix(NestedNameSpecifier *qualifier,
     case Type::DependentSizedExtVector:
     case Type::Vector:
     case Type::ExtVector:
+    case Type::Matrix:
+    case Type::DependentSizedMatrix:
     case Type::FunctionProto:
     case Type::FunctionNoProto:
     case Type::Enum:
@@ -2324,6 +2326,26 @@ void CXXNameMangler::mangleType(const ExtVectorType *T) {
 void CXXNameMangler::mangleType(const DependentSizedExtVectorType *T) {
   Out << "Dv";
   mangleExpression(T->getSizeExpr());
+  Out << '_';
+  mangleType(T->getElementType());
+}
+
+// Lava extension: matrix types
+// <type>        ::= <matrix-type>
+// <matrix-type> ::= Dm <positive row number> _ <positive column number> _
+//                       <element type>
+//               ::= Dm [<row expression>] _ [<column expresssion>] _
+//                       <element type>
+void CXXNameMangler::mangleType(const MatrixType *T) {
+  Out << "Dm" << T->getNumRows() << '_' << T->getNumColumns() << '_';
+  mangleType(T->getElementType());
+}
+
+void CXXNameMangler::mangleType(const DependentSizedMatrixType *T) {
+  Out << "Dm";
+  mangleExpression(T->getRowSizeExpr());
+  Out << '_';
+  mangleExpression(T->getColumnSizeExpr());
   Out << '_';
   mangleType(T->getElementType());
 }

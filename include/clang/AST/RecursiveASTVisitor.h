@@ -930,6 +930,16 @@ DEF_TRAVERSE_TYPE(VectorType, { TRY_TO(TraverseType(T->getElementType())); })
 
 DEF_TRAVERSE_TYPE(ExtVectorType, { TRY_TO(TraverseType(T->getElementType())); })
 
+DEF_TRAVERSE_TYPE(DependentSizedMatrixType, {
+  if (T->getRowSizeExpr())
+    TRY_TO(TraverseStmt(T->getRowSizeExpr()));
+  if (T->getColumnSizeExpr())
+    TRY_TO(TraverseStmt(T->getColumnSizeExpr()));
+  TRY_TO(TraverseType(T->getElementType()));
+})
+
+DEF_TRAVERSE_TYPE(MatrixType, { TRY_TO(TraverseType(T->getElementType())); })
+
 DEF_TRAVERSE_TYPE(FunctionNoProtoType,
                   { TRY_TO(TraverseType(T->getReturnType())); })
 
@@ -1131,6 +1141,22 @@ DEF_TRAVERSE_TYPELOC(VectorType, {
 // FIXME: size and attributes
 // FIXME: base VectorTypeLoc is unfinished
 DEF_TRAVERSE_TYPELOC(ExtVectorType, {
+  TRY_TO(TraverseType(TL.getTypePtr()->getElementType()));
+})
+
+// FIXME: order? why not row/column expr first?
+// FIXME: base MatrixTypeLoc is unfinished
+DEF_TRAVERSE_TYPELOC(DependentSizedMatrixType, {
+  if (TL.getTypePtr()->getRowSizeExpr())
+    TRY_TO(TraverseStmt(TL.getTypePtr()->getRowSizeExpr()));
+  if (TL.getTypePtr()->getColumnSizeExpr())
+    TRY_TO(TraverseStmt(TL.getTypePtr()->getColumnSizeExpr()));
+  TRY_TO(TraverseType(TL.getTypePtr()->getElementType()));
+})
+
+// FIXME: size and attributes
+// FIXME: base VectorTypeLoc is unfinished
+DEF_TRAVERSE_TYPELOC(MatrixType, {
   TRY_TO(TraverseType(TL.getTypePtr()->getElementType()));
 })
 

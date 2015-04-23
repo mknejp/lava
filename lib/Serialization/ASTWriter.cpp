@@ -184,6 +184,13 @@ void ASTTypeWriter::VisitExtVectorType(const ExtVectorType *T) {
   Code = TYPE_EXT_VECTOR;
 }
 
+void ASTTypeWriter::VisitMatrixType(const MatrixType *T) {
+  Writer.AddTypeRef(T->getElementType(), Record);
+  Record.push_back(T->getNumRows());
+  Record.push_back(T->getNumColumns());
+  Code = TYPE_MATRIX;
+}
+
 void ASTTypeWriter::VisitFunctionType(const FunctionType *T) {
   Writer.AddTypeRef(T->getReturnType(), Record);
   FunctionType::ExtInfo C = T->getExtInfo();
@@ -352,6 +359,13 @@ ASTTypeWriter::VisitDependentSizedExtVectorType(
                                         const DependentSizedExtVectorType *T) {
   // FIXME: Serialize this type (C++ only)
   llvm_unreachable("Cannot serialize dependent sized extended vector types");
+}
+
+void
+ASTTypeWriter::VisitDependentSizedMatrixType(
+                                           const DependentSizedMatrixType *T) {
+  // FIXME: Serialize this type (C++ only)
+  llvm_unreachable("Cannot serialize dependent sized matrix types");
 }
 
 void
@@ -525,6 +539,13 @@ void TypeLocWriter::VisitVectorTypeLoc(VectorTypeLoc TL) {
   Writer.AddSourceLocation(TL.getNameLoc(), Record);
 }
 void TypeLocWriter::VisitExtVectorTypeLoc(ExtVectorTypeLoc TL) {
+  Writer.AddSourceLocation(TL.getNameLoc(), Record);
+}
+void TypeLocWriter::VisitDependentSizedMatrixTypeLoc(
+                                              DependentSizedMatrixTypeLoc TL) {
+  Writer.AddSourceLocation(TL.getNameLoc(), Record);
+}
+void TypeLocWriter::VisitMatrixTypeLoc(MatrixTypeLoc TL) {
   Writer.AddSourceLocation(TL.getNameLoc(), Record);
 }
 void TypeLocWriter::VisitFunctionTypeLoc(FunctionTypeLoc TL) {
