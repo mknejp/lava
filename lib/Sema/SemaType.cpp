@@ -1723,13 +1723,13 @@ QualType Sema::BuildExtVectorType(QualType T, Expr *ArraySize,
 
     if (vectorSize == 0) {
       Diag(AttrLoc, diag::err_attribute_zero_size)
-      << ArraySize->getSourceRange();
+        << "vector" << ArraySize->getSourceRange();
       return QualType();
     }
 
     if (VectorType::isVectorSizeTooLarge(vectorSize)) {
       Diag(AttrLoc, diag::err_attribute_size_too_large)
-        << ArraySize->getSourceRange();
+        << "vector" << ArraySize->getSourceRange();
       return QualType();
     }
 
@@ -1778,25 +1778,25 @@ QualType Sema::BuildMatrixType(QualType T, Expr *RowSize, Expr *ColumnSize,
     
     if (numRows == 0) {
       Diag(AttrLoc, diag::err_attribute_zero_size)
-      << RowSize->getSourceRange();
+        << "matrix row" << RowSize->getSourceRange();
       return QualType();
     }
     
     if (numColumns == 0) {
       Diag(AttrLoc, diag::err_attribute_zero_size)
-        << ColumnSize->getSourceRange();
+        << "matrix column" << ColumnSize->getSourceRange();
       return QualType();
     }
     
     if (MatrixType::isMatrixRowSizeTooLarge(numRows)) {
       Diag(AttrLoc, diag::err_attribute_size_too_large)
-        << RowSize->getSourceRange();
+        << "matrix row" << RowSize->getSourceRange();
       return QualType();
     }
     
     if (MatrixType::isMatrixColumnSizeTooLarge(numColumns)) {
       Diag(AttrLoc, diag::err_attribute_size_too_large)
-        << ColumnSize->getSourceRange();
+        << "matrix column" << ColumnSize->getSourceRange();
       return QualType();
     }
     
@@ -4739,13 +4739,13 @@ static void HandleVectorSizeAttr(QualType& CurType, const AttributeList &Attr,
   }
   if (VectorType::isVectorSizeTooLarge(vectorSize / typeSize)) {
     S.Diag(Attr.getLoc(), diag::err_attribute_size_too_large)
-      << sizeExpr->getSourceRange();
+      << "vector" << sizeExpr->getSourceRange();
     Attr.setInvalid();
     return;
   }
   if (vectorSize == 0) {
     S.Diag(Attr.getLoc(), diag::err_attribute_zero_size)
-      << sizeExpr->getSourceRange();
+      << "vector" << sizeExpr->getSourceRange();
     Attr.setInvalid();
     return;
   }
@@ -4789,6 +4789,52 @@ static void HandleExtVectorTypeAttr(QualType &CurType,
 
   // Create the vector type.
   QualType T = S.BuildExtVectorType(CurType, sizeExpr, Attr.getLoc());
+  if (!T.isNull())
+    CurType = T;
+}
+
+/// \brief Process the graphics shader-like matrix_type attribute when it
+/// occurs on a type.
+static void HandleMatrixTypeAttr(QualType &CurType,
+                                 const AttributeList &Attr,
+                                 Sema &S) {
+  // check the attribute arguments.
+  if (Attr.getNumArgs() != 2) {
+    S.Diag(Attr.getLoc(), diag::err_attribute_wrong_number_arguments)
+    << Attr.getName() << 2;
+    return;
+  }
+  
+  auto getSizeExpr = [&] (int argIndex) -> Expr* {
+    // Special case where the argument is a template id.
+    if (Attr.isArgIdent(argIndex)) {
+      CXXScopeSpec SS;
+      SourceLocation TemplateKWLoc;
+      UnqualifiedId id;
+      id.setIdentifier(Attr.getArgAsIdent(argIndex)->Ident, Attr.getLoc());
+      
+      ExprResult Size = S.ActOnIdExpression(S.getCurScope(), SS, TemplateKWLoc,
+                                            id, false, false);
+      if (Size.isInvalid())
+        return nullptr;
+      
+      return Size.get();
+    } else {
+      return Attr.getArgAsExpr(argIndex);
+    }
+  };
+  
+  Expr *rowSizeExpr = getSizeExpr(0);
+  if(!rowSizeExpr)
+    return;
+  
+  Expr *columnSizeExpr = getSizeExpr(1);
+  if(!rowSizeExpr)
+    return;
+  
+  // Create the matrix type.
+  QualType T = S.BuildMatrixType(CurType, rowSizeExpr, columnSizeExpr,
+                                 Attr.getLoc());
   if (!T.isNull())
     CurType = T;
 }
@@ -4976,6 +5022,10 @@ static void processTypeAttrs(TypeProcessingState &state, QualType &type,
       break;
     case AttributeList::AT_ExtVectorType:
       HandleExtVectorTypeAttr(type, attr, state.getSema());
+      attr.setUsedAsTypeAttr();
+      break;
+    case AttributeList::AT_MatrixType:
+      HandleMatrixTypeAttr(type, attr, state.getSema());
       attr.setUsedAsTypeAttr();
       break;
     case AttributeList::AT_NeonVectorType:

@@ -274,6 +274,15 @@ public:
   /// introduce the same declarations repeatedly.
   void ReadExtVectorDecls(SmallVectorImpl<TypedefNameDecl*> &Decls) override;
 
+  /// \brief Read the set of matrix_type type declarations known to the
+  /// external Sema source.
+  ///
+  /// The external source should append its own matrix_type type declarations to
+  /// the given vector of declarations. Note that this routine may be
+  /// invoked multiple times; the external source should take care not to
+  /// introduce the same declarations repeatedly.
+  void ReadMatrixDecls(SmallVectorImpl<TypedefNameDecl*> &Decls) override;
+  
   /// \brief Read the set of dynamic classes known to the external Sema source.
   ///
   /// The external source should append its own dynamic classes to

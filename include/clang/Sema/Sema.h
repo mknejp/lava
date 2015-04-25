@@ -382,6 +382,15 @@ public:
   /// This is only necessary for issuing pretty diagnostics.
   ExtVectorDeclsType ExtVectorDecls;
 
+  typedef LazyVector<TypedefNameDecl *, ExternalSemaSource,
+                     &ExternalSemaSource::ReadMatrixDecls, 2, 2>
+                     MatrixDeclsType;
+  
+  /// MatrixDecls - This is a list all the matrix types. This allows
+  /// us to associate a raw matrix type with one of the matrix_type names.
+  /// This is only necessary for issuing pretty diagnostics.
+  MatrixDeclsType MatrixDecls;
+  
   /// FieldCollector - Collects CXXFieldDecls during parsing of C++ classes.
   std::unique_ptr<CXXFieldCollector> FieldCollector;
 

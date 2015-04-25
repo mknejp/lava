@@ -1028,6 +1028,12 @@ static void handleExtVectorTypeAttr(Sema &S, Scope *scope, Decl *D,
   S.ExtVectorDecls.push_back(cast<TypedefNameDecl>(D));
 }
 
+static void handleMatrixTypeAttr(Sema &S, Scope *scope, Decl *D,
+                                 const AttributeList &Attr) {
+  // Remember this typedef decl, we will need it later for diagnostics.
+  S.MatrixDecls.push_back(cast<TypedefNameDecl>(D));
+}
+
 static void handlePackedAttr(Sema &S, Decl *D, const AttributeList &Attr) {
   if (TagDecl *TD = dyn_cast<TagDecl>(D))
     TD->addAttr(::new (S.Context) PackedAttr(Attr.getRange(), S.Context,
@@ -4388,6 +4394,9 @@ static void ProcessDeclAttribute(Sema &S, Scope *scope, Decl *D,
     break;
   case AttributeList::AT_ExtVectorType:
     handleExtVectorTypeAttr(S, scope, D, Attr);
+    break;
+  case AttributeList::AT_MatrixType:
+    handleMatrixTypeAttr(S, scope, D, Attr);
     break;
   case AttributeList::AT_MinSize:
     handleMinSizeAttr(S, D, Attr);

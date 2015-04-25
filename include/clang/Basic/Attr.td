@@ -1975,3 +1975,11 @@ def OMPThreadPrivateDecl : InheritableAttr {
   let SemaHandler = 0;
   let Documentation = [Undocumented];
 }
+
+def MatrixType : Attr {
+  let Spellings = [GNU<"matrix_type">];
+  let Subjects = SubjectList<[TypedefName], ErrorDiag>;
+  let Args = [ExprArgument<"NumRows">, ExprArgument<"NumColumns">];
+  let ASTNode = 0;
+  let Documentation = [Undocumented];
+}
