@@ -2654,11 +2654,28 @@ class ExtVectorType : public VectorType {
 public:
   static int getPointAccessorIdx(char c) {
     switch (c) {
-    default: return -1;
-    case 'x': return 0;
-    case 'y': return 1;
-    case 'z': return 2;
-    case 'w': return 3;
+      default: return -1;
+      case 'x':
+      case 'r': return 0;
+      case 'y':
+      case 'g': return 1;
+      case 'z':
+      case 'b': return 2;
+      case 'w':
+      case 'a': return 3;
+    }
+  }
+  static int getPointAccessorGroupIdx(char c) {
+    switch (c) {
+      default: return -1;
+      case 'x':
+      case 'y':
+      case 'z':
+      case 'w': return 0;
+      case 'r':
+      case 'g':
+      case 'b':
+      case 'a': return 1;
     }
   }
   static int getNumericAccessorIdx(char c) {

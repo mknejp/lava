@@ -309,9 +309,15 @@ CheckExtVectorComponent(Sema &S, QualType baseType, ExprValueKind &VK,
     HalvingSwizzle = true;
   } else if (!HexSwizzle &&
              (Idx = vecType->getPointAccessorIdx(*compStr)) != -1) {
+    int Group = vecType->getPointAccessorGroupIdx(*compStr);
     do {
       if (HasIndex[Idx]) HasRepeated = true;
       HasIndex[Idx] = true;
+      if(Group != vecType->getPointAccessorGroupIdx(*compStr)) {
+        S.Diag(OpLoc, diag::err_ext_vector_component_mixed_group)
+          << SourceRange(CompLoc);
+        return QualType();
+      }
       compStr++;
     } while (*compStr && (Idx = vecType->getPointAccessorIdx(*compStr)) != -1);
   } else {
