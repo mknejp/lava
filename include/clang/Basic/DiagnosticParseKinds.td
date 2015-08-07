@@ -1007,4 +1007,8 @@ def err_module_expected_semi : Error<
   "expected ';' after module name">;
 }
 
+// Lava support
+def err_lava_too_many_qualifiers : Error<
+  "too many entry point qualifiers">;
+
 } // end of Parser diagnostics

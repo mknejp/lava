@@ -108,7 +108,9 @@ namespace {
     KEYNOMS = 0x01000,
     WCHARSUPPORT = 0x02000,
     HALFSUPPORT = 0x04000,
-    KEYALL = (0xffff & ~KEYNOMS) // Because KEYNOMS is used to exclude.
+    KEYLAVA = 0x8000,
+    KEYNOLAVA = 0x10000,
+    KEYALL = (0xfffff & ~KEYNOMS & ~KEYNOLAVA) // KEYNOMS, KEYNOLAVA are used to exclude.
   };
 
   /// \brief How a keyword is treated in the selected standard.
@@ -142,6 +144,8 @@ static KeywordStatus getKeywordStatus(const LangOptions &LangOpts,
   // in non-arc mode.
   if (LangOpts.ObjC2 && (Flags & KEYARC)) return KS_Enabled;
   if (LangOpts.CPlusPlus && (Flags & KEYCXX11)) return KS_Future;
+  if (LangOpts.Lava && (Flags & KEYLAVA)) return KS_Enabled;
+  if (!LangOpts.Lava && (Flags & KEYNOLAVA)) return KS_Enabled;
   return KS_Disabled;
 }
 

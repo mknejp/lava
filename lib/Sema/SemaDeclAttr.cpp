@@ -4789,6 +4789,14 @@ static void ProcessDeclAttribute(Sema &S, Scope *scope, Decl *D,
   case AttributeList::AT_TypeTagForDatatype:
     handleTypeTagForDatatypeAttr(S, D, Attr);
     break;
+      
+  // Lava attributes
+  case AttributeList::AT_LavaFragment:
+    handleSimpleAttribute<LavaFragmentAttr>(S, D, Attr);
+    break;
+  case AttributeList::AT_LavaVertex:
+    handleSimpleAttribute<LavaVertexAttr>(S, D, Attr);
+    break;
   }
 }
 

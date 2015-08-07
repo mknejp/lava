@@ -679,6 +679,24 @@ void Parser::ParseOpenCLQualifiers(ParsedAttributes &Attrs) {
                AttributeList::AS_Keyword);
 }
 
+void Parser::ParseLavaFunctionQualifiers(ParsedAttributes &attrs) {
+  // Treat these like attributes
+  bool hasAttrib = false;
+  bool diagnosed = false;
+  while (Tok.getKind() >= tok::kw_vertex && Tok.getKind() <= tok::kw_fragment) {
+    if(hasAttrib && !diagnosed) {
+      Diag(Tok, diag::err_lava_too_many_qualifiers);
+      diagnosed = true;
+    }
+    
+    IdentifierInfo *AttrName = Tok.getIdentifierInfo();
+    SourceLocation AttrNameLoc = ConsumeToken();
+    attrs.addNew(AttrName, AttrNameLoc, nullptr, AttrNameLoc, nullptr, 0,
+                 AttributeList::AS_Keyword);
+    hasAttrib = true;
+  }
+}
+
 static bool VersionNumberSeparator(const char Separator) {
   return (Separator == '.' || Separator == '_');
 }
@@ -2544,6 +2562,8 @@ Parser::DiagnoseMissingSemiAfterTagDefinition(DeclSpec &DS, AccessSpecifier AS,
 /// [C++]   'virtual'
 /// [C++]   'explicit'
 /// [OpenCL] '__kernel'
+/// [Lava]  'fragment'
+/// [Lava]  'vertex'
 ///       'friend': [C++ dcl.friend]
 ///       'constexpr': [C++0x dcl.constexpr]
 
@@ -2987,6 +3007,12 @@ void Parser::ParseDeclarationSpecifiers(DeclSpec &DS,
       ParseOpenCLAttributes(DS.getAttributes());
       continue;
 
+    // Lava single token adornments.
+    case tok::kw_fragment:
+    case tok::kw_vertex:
+      ParseLavaFunctionQualifiers(DS.getAttributes());
+      continue;
+      
     // storage-class-specifier
     case tok::kw_typedef:
       isInvalid = DS.SetStorageClassSpec(Actions, DeclSpec::SCS_typedef, Loc,

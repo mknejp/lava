@@ -233,6 +233,9 @@ PUNCTUATOR(greatergreatergreater, ">>>")
 //   BOOLSUPPORT - This is a keyword if 'bool' is a built-in type
 //   HALFSUPPORT - This is a keyword if 'half' is a built-in type
 //   WCHARSUPPORT - This is a keyword if 'wchar_t' is a built-in type
+//   KEYLAVA   - This is a keyword in the Lava C++ dialect
+//   KEYNOLAVA - This is a keyword that must never be enabled in the
+//               Lava C++ dialect
 //
 KEYWORD(auto                        , KEYALL)
 KEYWORD(break                       , KEYALL)
@@ -582,6 +585,9 @@ ALIAS("__char32_t"   , char32_t   , KEYCXX)
 // Clang-specific keywords enabled only in testing.
 TESTING_KEYWORD(__unknown_anytype , KEYALL)
 
+// Lava keywords
+KEYWORD(fragment , KEYLAVA)
+KEYWORD(vertex, KEYLAVA)
 
 //===----------------------------------------------------------------------===//
 // Objective-C @-preceded keywords.

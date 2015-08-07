@@ -1976,10 +1976,52 @@ def OMPThreadPrivateDecl : InheritableAttr {
   let Documentation = [Undocumented];
 }
 
+def Lava : LangOpt<"Lava">;
+
 def MatrixType : Attr {
   let Spellings = [GNU<"matrix_type">];
   let Subjects = SubjectList<[TypedefName], ErrorDiag>;
   let Args = [ExprArgument<"NumRows">, ExprArgument<"NumColumns">];
   let ASTNode = 0;
+  let LangOpts = [Lava];
+  let Documentation = [Undocumented];
+}
+
+def LavaFragment : InheritableAttr {
+  let Spellings = [Keyword<"fragment">];
+  let Subjects = SubjectList<[Function], ErrorDiag>;
+  let LangOpts = [Lava];
+  let Documentation = [Undocumented];
+}
+
+def LavaVertex : InheritableAttr {
+  let Spellings = [Keyword<"vertex">];
+  let Subjects = SubjectList<[Function], ErrorDiag>;
+  let LangOpts = [Lava];
+  let Documentation = [Undocumented];
+}
+
+def LavaInput : InheritableParamAttr {
+  let Spellings = [CXX11<"", "input", 201309>];
+  let Subjects = SubjectList<[ParmVar], ErrorDiag>;
+  let LangOpts = [Lava];
+  let SemaHandler = 0;
+  let Documentation = [Undocumented];
+}
+
+def LavaLocation : InheritableParamAttr {
+  let Spellings = [CXX11<"", "location", 201309>];
+  let Args = [UnsignedArgument<"index">];
+  let Subjects = SubjectList<[ParmVar, Field], ErrorDiag, "ExpectedParameter">;
+  let LangOpts = [Lava];
+  let SemaHandler = 0;
+  let Documentation = [Undocumented];
+}
+
+def LavaPosition : InheritableParamAttr {
+  let Spellings = [CXX11<"", "position", 201309>];
+  let Subjects = SubjectList<[ParmVar, Field], ErrorDiag, "ExpectedParameter">;
+  let LangOpts = [Lava];
+  let SemaHandler = 0;
   let Documentation = [Undocumented];
 }
