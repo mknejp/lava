@@ -519,35 +519,58 @@ void TypePrinter::printDependentSizedArrayAfter(
 
 void TypePrinter::printDependentSizedExtVectorBefore(
                                           const DependentSizedExtVectorType *T, 
-                                          raw_ostream &OS) { 
-  printBefore(T->getElementType(), OS);
+                                          raw_ostream &OS) {
+  if(!Policy.LangOpts.Lava)
+    printBefore(T->getElementType(), OS);
 }
 void TypePrinter::printDependentSizedExtVectorAfter(
                                           const DependentSizedExtVectorType *T, 
                                           raw_ostream &OS) { 
-  OS << " __attribute__((ext_vector_type(";
-  if (T->getSizeExpr())
-    T->getSizeExpr()->printPretty(OS, nullptr, Policy);
-  OS << ")))";  
-  printAfter(T->getElementType(), OS);
+  if(Policy.LangOpts.Lava) {
+    OS << "vec<";
+    print(T->getElementType(), OS, "");
+    OS << ", ";
+    if (T->getSizeExpr())
+      T->getSizeExpr()->printPretty(OS, nullptr, Policy);
+    OS << ">";
+  } else {
+    OS << " __attribute__((ext_vector_type(";
+    if (T->getSizeExpr())
+      T->getSizeExpr()->printPretty(OS, nullptr, Policy);
+    OS << ")))";  
+    printAfter(T->getElementType(), OS);
+  }
 }
 
 void TypePrinter::printDependentSizedMatrixBefore(
                                              const DependentSizedMatrixType *T,
                                              raw_ostream &OS) {
-  printBefore(T->getElementType(), OS);
+  if(!Policy.LangOpts.Lava)
+    printBefore(T->getElementType(), OS);
 }
 void TypePrinter::printDependentSizedMatrixAfter(
                                               const DependentSizedMatrixType *T,
                                               raw_ostream &OS) {
-  OS << " __attribute__((matrix_type(";
-  if (T->getRowSizeExpr())
-    T->getRowSizeExpr()->printPretty(OS, nullptr, Policy);
-  OS << ",";
-  if (T->getColumnSizeExpr())
-    T->getColumnSizeExpr()->printPretty(OS, nullptr, Policy);
-  OS << ")))";
-  printAfter(T->getElementType(), OS);
+  if(Policy.LangOpts.Lava) {
+    OS << "mat<";
+    print(T->getElementType(), OS, "");
+    OS << ", ";
+    if (T->getRowSizeExpr())
+      T->getRowSizeExpr()->printPretty(OS, nullptr, Policy);
+    OS << ", ";
+    if (T->getColumnSizeExpr())
+      T->getColumnSizeExpr()->printPretty(OS, nullptr, Policy);
+    OS << ">";
+  } else {
+    OS << " __attribute__((matrix_type(";
+    if (T->getRowSizeExpr())
+      T->getRowSizeExpr()->printPretty(OS, nullptr, Policy);
+    OS << ",";
+    if (T->getColumnSizeExpr())
+      T->getColumnSizeExpr()->printPretty(OS, nullptr, Policy);
+    OS << ")))";
+    printAfter(T->getElementType(), OS);
+  }
 }
 
 void TypePrinter::printVectorBefore(const VectorType *T, raw_ostream &OS) {
@@ -592,25 +615,45 @@ void TypePrinter::printVectorAfter(const VectorType *T, raw_ostream &OS) {
 
 void TypePrinter::printExtVectorBefore(const ExtVectorType *T,
                                        raw_ostream &OS) { 
-  printBefore(T->getElementType(), OS);
+  if(!Policy.LangOpts.Lava)
+    printBefore(T->getElementType(), OS);
 }
-void TypePrinter::printExtVectorAfter(const ExtVectorType *T, raw_ostream &OS) { 
-  printAfter(T->getElementType(), OS);
-  OS << " __attribute__((ext_vector_type(";
-  OS << T->getNumElements();
-  OS << ")))";
+void TypePrinter::printExtVectorAfter(const ExtVectorType *T, raw_ostream &OS) {
+  if(Policy.LangOpts.Lava) {
+    OS << " vec<";
+    print(T->getElementType(), OS, "");
+    OS << ", ";
+    OS << T->getNumElements();
+    OS << ">";
+  } else {
+    printAfter(T->getElementType(), OS);
+    OS << " __attribute__((ext_vector_type(";
+    OS << T->getNumElements();
+    OS << ")))";
+  }
 }
 
 void TypePrinter::printMatrixBefore(const MatrixType *T, raw_ostream &OS) {
-  printBefore(T->getElementType(), OS);
+  if(!Policy.LangOpts.Lava)
+    printBefore(T->getElementType(), OS);
 }
 void TypePrinter::printMatrixAfter(const MatrixType *T, raw_ostream &OS) {
-  printAfter(T->getElementType(), OS);
-  OS << " __attribute__((matrix_type(";
-  OS << T->getNumRows();
-  OS << ",";
-  OS << T->getNumColumns();
-  OS << ")))";
+  if(Policy.LangOpts.Lava) {
+    OS << " mat<";
+    print(T->getElementType(), OS, "");
+    OS << ", ";
+    OS << T->getNumRows();
+    OS << ", ";
+    OS << T->getNumColumns();
+    OS << ">";
+  } else {
+    printAfter(T->getElementType(), OS);
+    OS << " __attribute__((matrix_type(";
+    OS << T->getNumRows();
+    OS << ",";
+    OS << T->getNumColumns();
+    OS << ")))";
+  }
 }
 
 void
