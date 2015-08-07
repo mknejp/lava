@@ -63,7 +63,7 @@ struct TestVFO {
       clang_VirtualFileOverlay_writeToBuffer(VFO, 0, &BufPtr, &BufSize);
       std::string BufStr(BufPtr, BufSize);
       EXPECT_STREQ(Contents, BufStr.c_str());
-      free(BufPtr);
+      clang_free(BufPtr);
     }
     clang_VirtualFileOverlay_dispose(VFO);
   }
@@ -345,7 +345,7 @@ TEST(libclang, ModuleMapDescriptor) {
   clang_ModuleMapDescriptor_writeToBuffer(MMD, 0, &BufPtr, &BufSize);
   std::string BufStr(BufPtr, BufSize);
   EXPECT_STREQ(Contents, BufStr.c_str());
-  free(BufPtr);
+  clang_free(BufPtr);
   clang_ModuleMapDescriptor_dispose(MMD);
 }
 
@@ -357,7 +357,7 @@ public:
   CXTranslationUnit ClangTU;
   unsigned TUFlags;
 
-  void SetUp() {
+  void SetUp() override {
     llvm::SmallString<256> Dir;
     ASSERT_FALSE(llvm::sys::fs::createUniqueDirectory("libclang-test", Dir));
     TestDir = Dir.str();
@@ -365,7 +365,7 @@ public:
               clang_defaultEditingTranslationUnitOptions();
     Index = clang_createIndex(0, 0);
   }
-  void TearDown() {
+  void TearDown() override {
     clang_disposeTranslationUnit(ClangTU);
     clang_disposeIndex(Index);
     for (const std::string &Path : Files)

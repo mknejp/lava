@@ -10,7 +10,7 @@
 #include "clang/Lava/ModuleBuilder_GLSL.h"
 
 #include "clang/AST/DeclCXX.h"
-#include "clang/lava/ModuleBuilder.h"
+#include "clang/Lava/ModuleBuilder.h"
 
 using namespace clang;
 using namespace lava;

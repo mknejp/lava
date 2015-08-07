@@ -47,51 +47,6 @@ namespace cl = llvm::cl;
 using namespace clang;
 using namespace clang::tooling;
 
-namespace llvm { namespace cl
-{
-  /// \brief Mark all options not part of this category as cl::ReallyHidden.
-  ///
-  /// \param Category the category of options to keep displaying
-  ///
-  /// Some tools (like clang-format) like to be able to hide all options that are
-  /// not specific to the tool. This function allows a tool to specify a single
-  /// option category to display in the -help output.
-  void HideUnrelatedOptions(cl::OptionCategory &Category) {
-    StringMap<cl::Option *> Options;
-    cl::getRegisteredOptions(Options);
-    for (auto &I : Options) {
-      if (I.second->Category != &Category &&
-          I.first() != "help" &&
-          I.first() != "help-list" &&
-          I.first() != "version")
-        I.second->setHiddenFlag(cl::ReallyHidden);
-    }
-  }
-
-  /// \brief Mark all options not part of the categories as cl::ReallyHidden.
-  ///
-  /// \param Categories the categories of options to keep displaying.
-  ///
-  /// Some tools (like clang-format) like to be able to hide all options that are
-  /// not specific to the tool. This function allows a tool to specify a single
-  /// option category to display in the -help output.
-  void HideUnrelatedOptions(ArrayRef<const cl::OptionCategory *> Categories) {
-    auto CategoriesBegin = Categories.begin();
-    auto CategoriesEnd = Categories.end();
-    StringMap<cl::Option *> Options;
-    cl::getRegisteredOptions(Options);
-    for (auto &I : Options) {
-      if (std::find(CategoriesBegin, CategoriesEnd, I.second->Category) ==
-          CategoriesEnd &&
-          I.first() != "help" &&
-          I.first() != "help-list" &&
-          I.first() != "version")
-        I.second->setHiddenFlag(cl::ReallyHidden);
-    }
-  }
-  
-}}
-
 namespace {
 
   // All options must belong to locally defined categories for them to get shown
