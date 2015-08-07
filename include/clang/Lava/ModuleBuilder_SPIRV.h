@@ -26,6 +26,7 @@ namespace clang
     
     namespace spirv
     {
+      class FunctionBuilder;
       class ModuleBuilder;
       class RecordBuilder;
       class TypeCache;
@@ -69,6 +70,26 @@ private:
   CXXRecordDecl* _decl;
 };
 
+class clang::lava::spirv::FunctionBuilder
+{
+public:
+  FunctionBuilder(FunctionDecl& decl, TypeCache& types);
+
+  bool setReturnType(QualType type);
+  bool addParam(QualType type, llvm::StringRef identifier);
+  template<class F>
+  bool pushScope(F director);
+
+  spv::Id finalize();
+
+private:
+  TypeCache& _types;
+  
+  FunctionDecl& _decl;
+  QualType _returnType;
+  std::vector<std::pair<QualType, std::string>> _formalParams;
+};
+
 class clang::lava::spirv::ModuleBuilder
 {
 public:
@@ -78,6 +99,8 @@ public:
 
   template<class Director>
   bool buildRecord(QualType type, Director director);
+  template<class Director>
+  bool buildFunction(FunctionDecl& decl, Director director);
 
 private:
   ASTContext& _ast;

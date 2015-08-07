@@ -20,6 +20,7 @@ using namespace lava;
 
 ModuleBuilder::Concept::~Concept() = default;
 void RecordBuilder::vftbl() { }
+void FunctionBuilder::vftbl() { }
 
 ////////////////////////////////////////////////////////////////////////////////
 // buildModule
@@ -86,6 +87,13 @@ namespace
 
   bool buildFunction(FunctionDecl& decl, FunctionBuilder& builder)
   {
+    builder.setReturnType(decl.getReturnType());
+    // We feed the arguments individually in case we have to transform them
+    for(auto* param : decl.params())
+    {
+      builder.addParam(param->getType(), param->getName());
+    }
+    builder.pushScope([&] () { });
     return true;
   }
 
@@ -93,10 +101,10 @@ namespace
   {
     return for_each_entity(stage, context.functions, [&] (EmittedFunction& f)
     {
-//      auto builder = 
-//      if(!buildFunction(*f.decl, builder.beginFunction(*f.decl)))
-//       return false;
-//      builder.endFunction();
+      return module.buildFunction(*f.decl, [&f] (FunctionBuilder& builder)
+      {
+        buildFunction(*f.decl, builder);
+      });
       return false;
     });
   }

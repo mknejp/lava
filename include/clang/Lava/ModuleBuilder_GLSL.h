@@ -31,6 +31,7 @@ namespace clang
 
     namespace glsl
     {
+      class FunctionBuilder;
       class ModuleBuilder;
       class RecordBuilder;
       class TypeNamePrinter;
@@ -47,7 +48,9 @@ public:
   }
 
   void printTypeName(QualType type, IndentWriter& w);
+  void printFunctionName(FunctionDecl& decl, IndentWriter& w);
   void printCxxTypeName(QualType type, IndentWriter& w);
+  void printCxxFunctionName(FunctionDecl& decl, IndentWriter& w);
 
 private:
   void printDimensionality(unsigned n, IndentWriter& w);
@@ -78,6 +81,35 @@ private:
   bool _printedCapturesHeader : 1;
 };
 
+class clang::lava::glsl::FunctionBuilder
+{
+public:
+  FunctionBuilder(FunctionDecl& decl, TypeNamePrinter& typeNamePrinter);
+
+  bool setReturnType(QualType type);
+  bool addParam(QualType type, llvm::StringRef identifier);
+  template<class F>
+  bool pushScope(F director);
+
+  void finalize();
+
+  std::string declaration() { return std::move(_declString); }
+  std::string definition() { return std::move(_defString); }
+
+private:
+  void buildProtoStrings();
+
+  std::string _declString;
+  std::string _defString;
+  llvm::raw_string_ostream _ostream{_defString};
+  IndentWriter _w{_ostream};
+  TypeNamePrinter& _typeNamePrinter;
+
+  FunctionDecl& _decl;
+  QualType _returnType;
+  std::vector<std::pair<QualType, std::string>> _formalParams;
+};
+
 class clang::lava::glsl::ModuleBuilder
 {
 public:
@@ -87,6 +119,8 @@ public:
 
   template<class Director>
   bool buildRecord(QualType type, Director director);
+  template<class Director>
+  bool buildFunction(FunctionDecl& decl, Director director);
 
 private:
   // The definitions for all kinds of symbols are clustered together and we

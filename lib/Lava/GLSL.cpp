@@ -91,9 +91,19 @@ void glsl::TypeNamePrinter::printTypeName(QualType type, IndentWriter& w)
     llvm_unreachable("invalid GLSL type");
 }
 
+void glsl::TypeNamePrinter::printFunctionName(FunctionDecl& decl, IndentWriter& w)
+{
+  _mangler->mangleCXXName(&decl, w.ostreamWithIndent());
+}
+
 void glsl::TypeNamePrinter::printCxxTypeName(QualType type, IndentWriter& w)
 {
   type.print(w.ostreamWithIndent(), _mangler->getASTContext().getPrintingPolicy());
+}
+
+void glsl::TypeNamePrinter::printCxxFunctionName(FunctionDecl& decl, IndentWriter& w)
+{
+  decl.printQualifiedName(w.ostreamWithIndent());
 }
 
 void glsl::TypeNamePrinter::printDimensionality(unsigned n, IndentWriter& w)
@@ -194,6 +204,98 @@ void glsl::RecordBuilder::printFieldImpl(QualType type, llvm::StringRef identifi
 }
 
 ////////////////////////////////////////////////////////////////////////////////
+// GlslFunctionBuilder
+//
+
+glsl::FunctionBuilder::FunctionBuilder(FunctionDecl& decl, TypeNamePrinter& typeNamePrinter)
+: _typeNamePrinter(typeNamePrinter)
+, _decl(decl)
+{
+}
+
+bool glsl::FunctionBuilder::setReturnType(QualType type)
+{
+  _returnType = type;
+  return true;
+}
+
+bool glsl::FunctionBuilder::addParam(QualType type, llvm::StringRef identifier)
+{
+  _formalParams.push_back({type, identifier.str()});
+  return true;
+}
+
+template<class F>
+bool glsl::FunctionBuilder::pushScope(F director)
+{
+  if(_declString.empty())
+  {
+    // This is the first block in the function.
+    // This means we know the entire signature and can emit the decl and header.
+    buildProtoStrings();
+  }
+  _w << '{' << _w.endln();
+  _w.increase();
+  if(director())
+  {
+    _w.decrease();
+    _w << '}' << _w.endln();
+    return true;
+  }
+  else
+    return false;
+}
+
+void glsl::FunctionBuilder::finalize()
+{
+  _w.ostream().flush();
+}
+
+void glsl::FunctionBuilder::buildProtoStrings()
+{
+  assert(!_returnType.isNull() && "return type not set");
+  {
+    // Build the decl first and re-use it for the definition as they are the same
+    llvm::raw_string_ostream out{_declString};
+    IndentWriter w{out};
+
+    w << "// ";
+    _returnType.print(w.ostream(), _decl.getASTContext().getPrintingPolicy());
+    w << ' ';
+    _typeNamePrinter.printCxxFunctionName(_decl, w);
+    w << '(';
+    bool first = true;
+    for(const auto& param : _decl.params())
+    {
+      if(!first)
+        w << ", ";
+      first = false;
+      param->print(w.ostream());
+    }
+    w << ')' << w.endln();
+
+    _typeNamePrinter.printTypeName(_returnType, w);
+    w << ' ';
+    _typeNamePrinter.printFunctionName(_decl, w);
+    w << '(';
+    first = true;
+    for(const auto& param : _formalParams)
+    {
+      if(!first)
+        w << ", ";
+      first = false;
+      _typeNamePrinter.printTypeName(param.first, w);
+      w << ' ' << param.second;
+    }
+    w << ')';
+  }
+  _defString = _declString;
+  _declString += ";\n";
+
+  _defString += '\n';
+}
+
+////////////////////////////////////////////////////////////////////////////////
 // ModuleBuilder
 //
 
@@ -214,7 +316,21 @@ bool glsl::ModuleBuilder::buildRecord(QualType type, Director director)
   return success;
 }
 
+template<class Director>
+bool glsl::ModuleBuilder::buildFunction(FunctionDecl& decl, Director director)
+{
+  FunctionBuilder builder{decl, _typeNamePrinter};
+  auto success = director(builder);
+  if(success)
+  {
+    builder.finalize();
+    _functions.decls += builder.declaration();
+    _functions.defs += builder.definition();
+  }
+  return success;
+}
+
 std::string glsl::ModuleBuilder::moduleContent()
 {
-  return _records.defs + _functions.decls + _functions.defs;
+  return _records.defs + '\n' + _functions.decls + '\n' + _functions.defs;
 }

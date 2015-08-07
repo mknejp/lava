@@ -91,6 +91,96 @@ private:
 };
 
 ////////////////////////////////////////////////////////////////////////////////
+// FunctionBuilder
+//
+
+class clang::lava::FunctionBuilder
+{
+public:
+  bool setReturnType(QualType type)
+  {
+    return _success = _success && setReturnTypeImpl(type);
+  }
+  bool addParam(QualType type, llvm::StringRef identifier)
+  {
+    return _success = _success && addParamImpl(type, identifier);
+  }
+  template<class F>
+  bool pushScope(F director, decltype(std::declval<F>()(std::declval<FunctionBuilder&>()))* = nullptr)
+  {
+    if(_success)
+    {
+      auto f = std::function<void(FunctionBuilder&)>{std::forward<F>(director)};
+      _success = _success && pushScopeImpl(f);
+    }
+    return _success;
+  }
+  template<class F>
+  bool pushScope(F director, decltype(std::declval<F>()())* = nullptr)
+  {
+    if(_success)
+    {
+      auto f = std::function<void()>{std::forward<F>(director)};
+      _success = _success && pushScopeImpl(f);
+    }
+    return _success;
+  }
+
+protected:
+  FunctionBuilder() = default;
+  ~FunctionBuilder() = default;
+  FunctionBuilder(const FunctionBuilder&) = default;
+  FunctionBuilder(FunctionBuilder&&) = default;
+  FunctionBuilder& operator=(const FunctionBuilder&) = default;
+  FunctionBuilder& operator=(FunctionBuilder&&) = default;
+
+private:
+  template<class T>
+  class Impl;
+  friend ModuleBuilder;
+
+  bool success() const { return _success; }
+
+  virtual bool setReturnTypeImpl(QualType type) = 0;
+  virtual bool addParamImpl(QualType type, llvm::StringRef identifier) = 0;
+  virtual bool pushScopeImpl(std::function<void(FunctionBuilder&)>& director) = 0;
+  virtual bool pushScopeImpl(std::function<void()>& director) = 0;
+
+  virtual void vftbl();
+
+  bool _success = true;
+};
+
+template<class T>
+class clang::lava::FunctionBuilder::Impl final : public FunctionBuilder
+{
+public:
+  Impl(T& target) : _target(target) { }
+
+private:
+  bool setReturnTypeImpl(QualType type) override { return _target.setReturnType(type); }
+  bool addParamImpl(QualType type, llvm::StringRef identifier) override  { return _target.addParam(type, identifier); }
+  bool pushScopeImpl(std::function<void(FunctionBuilder&)>& director) override
+  {
+    return _target.pushScope([this, &director]
+    {
+      director(*this);
+      return success();
+    });
+  }
+  bool pushScopeImpl(std::function<void()>& director) override
+  {
+    return _target.pushScope([this, &director]
+    {
+      director();
+      return success();
+    });
+  }
+
+  T& _target;
+};
+
+////////////////////////////////////////////////////////////////////////////////
 // ModuleBuilder
 //
 
@@ -109,6 +199,12 @@ public:
     auto f = std::function<void(RecordBuilder&)>{std::forward<F>(director)};
     return _target->buildRecord(type, f);
   }
+  template<class F>
+  auto buildFunction(FunctionDecl& decl, F&& director) -> bool
+  {
+    auto f = std::function<void(FunctionBuilder&)>{std::forward<F>(director)};
+    return _target->buildFunction(decl, f);
+  }
   // Can be text or binary and is the full module content to be written to a file
   auto moduleContent() -> std::string { return _target->moduleContent(); }
 
@@ -119,6 +215,7 @@ private:
     virtual ~Concept();
 
     virtual auto buildRecord(QualType type, std::function<void(RecordBuilder&)>& director) -> bool = 0;
+    virtual auto buildFunction(FunctionDecl& decl, std::function<void(FunctionBuilder&)>& director) -> bool = 0;
     virtual auto moduleContent() -> std::string = 0;
   };
 
@@ -140,6 +237,11 @@ public:
   auto buildRecord(QualType type, std::function<void(RecordBuilder&)>& director) -> bool override
   {
     return _target.buildRecord(type, DirectorInvoker<RecordBuilder>{_target, director});
+  }
+
+  auto buildFunction(FunctionDecl& decl, std::function<void(FunctionBuilder&)>& director) -> bool override
+  {
+    return _target.buildFunction(decl, DirectorInvoker<FunctionBuilder>{_target, director});
   }
 
   auto moduleContent() -> std::string override { return _target.moduleContent(); }

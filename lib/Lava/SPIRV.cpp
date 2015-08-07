@@ -135,6 +135,38 @@ spv::Id spirv::RecordBuilder::finalize()
 }
 
 ////////////////////////////////////////////////////////////////////////////////
+// FunctionBuilder
+//
+
+spirv::FunctionBuilder::FunctionBuilder(FunctionDecl& decl, TypeCache& types)
+: _types(types)
+, _decl(decl)
+{
+}
+
+bool spirv::FunctionBuilder::setReturnType(QualType type)
+{
+  return true;
+}
+
+bool spirv::FunctionBuilder::addParam(QualType type, llvm::StringRef identifier)
+{
+  return true;
+}
+
+template<class F>
+bool spirv::FunctionBuilder::pushScope(F director)
+{
+  director();
+  return true;
+}
+
+spv::Id spirv::FunctionBuilder::finalize()
+{
+  return 0;
+}
+
+////////////////////////////////////////////////////////////////////////////////
 // ModuleBuilder
 //
 
@@ -163,6 +195,18 @@ bool spirv::ModuleBuilder::buildRecord(QualType type, Director director)
   if(success)
   {
     _types.add(type->getAsCXXRecordDecl(), builder.finalize());
+  }
+  return success;
+}
+
+template<class Director>
+bool spirv::ModuleBuilder::buildFunction(FunctionDecl& decl, Director director)
+{
+  FunctionBuilder builder{decl, _types};
+  auto success = director(builder);
+  if(success)
+  {
+    builder.finalize();
   }
   return success;
 }
