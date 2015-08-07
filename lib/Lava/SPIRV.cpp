@@ -87,12 +87,13 @@ void spirv::TypeCache::add(CXXRecordDecl* decl, spv::Id id)
 // RecordBuilder
 //
 
-spirv::RecordBuilder::RecordBuilder(QualType type, spirv::ModuleBuilder& module)
-: _module(module)
+spirv::RecordBuilder::RecordBuilder(QualType type, TypeCache& types, ASTContext& ast)
+: _types(types)
+, _ast(ast)
 , _decl(type->getAsCXXRecordDecl())
 {
   llvm::raw_string_ostream out{_name};
-  type.print(out, _module.ast().getPrintingPolicy());
+  type.print(out, _ast.getPrintingPolicy());
 }
 
 bool spirv::RecordBuilder::addBase(QualType type, unsigned index)
@@ -102,33 +103,33 @@ bool spirv::RecordBuilder::addBase(QualType type, unsigned index)
     llvm::raw_string_ostream out{name};
     out << "base$" << index;
   }
-  _members.emplace_back(_module.types()[type]);
+  _members.emplace_back(_types[type]);
   _names.emplace_back(std::move(name));
   return true;
 }
 
 bool spirv::RecordBuilder::addField(QualType type, llvm::StringRef identifier)
 {
-  _members.emplace_back(_module.types()[type]);
+  _members.emplace_back(_types[type]);
   _names.emplace_back(identifier.str());
   return true;
 }
 
 bool spirv::RecordBuilder::addCapture(QualType type, llvm::StringRef identifier)
 {
-  _members.emplace_back(_module.types()[type]);
+  _members.emplace_back(_types[type]);
   _names.emplace_back(identifier.str());
   return true;
 }
 
 spv::Id spirv::RecordBuilder::finalize()
 {
-  auto id = _module.builder().makeStructType(_members, _name.c_str());
+  auto id = _types.builder().makeStructType(_members, _name.c_str());
 
   auto i = 0;
   for(const auto& name : _names)
   {
-    _module.builder().addMemberName(id, i++, name.c_str());
+    _types.builder().addMemberName(id, i++, name.c_str());
   }
   return id;
 }
@@ -154,18 +155,14 @@ std::string spirv::ModuleBuilder::moduleContent()
   return string;
 }
 
-bool spirv::ModuleBuilder::buildRecord(QualType type, std::function<void(lava::RecordBuilder&)>& blueprint)
+template<class Director>
+bool spirv::ModuleBuilder::buildRecord(QualType type, Director director)
 {
-  RecordBuilderImpl<RecordBuilder> builder{type, *this};
-  blueprint(builder);
-  if(builder.success())
+  RecordBuilder builder{type, _types, _ast};
+  auto success = director(builder);
+  if(success)
   {
-    _types.add(type->getAsCXXRecordDecl(), builder->finalize());
+    _types.add(type->getAsCXXRecordDecl(), builder.finalize());
   }
-  return builder.success();
-}
-
-void spirv::ModuleBuilder::appendRecord(CXXRecordDecl* decl, spv::Id id)
-{
-  _types.add(decl, id);
+  return success;
 }

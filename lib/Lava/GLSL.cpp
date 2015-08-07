@@ -91,7 +91,7 @@ void glsl::TypeNamePrinter::printTypeName(QualType type, IndentWriter& w)
     llvm_unreachable("invalid GLSL type");
 }
 
-void glsl::TypeNamePrinter::printCxxDiagnosticTypeName(QualType type, IndentWriter& w)
+void glsl::TypeNamePrinter::printCxxTypeName(QualType type, IndentWriter& w)
 {
   type.print(w.ostreamWithIndent(), _mangler->getASTContext().getPrintingPolicy());
 }
@@ -121,7 +121,7 @@ glsl::RecordBuilder::RecordBuilder(QualType type, TypeNamePrinter& typeNamePrint
   assert(type->getAsCXXRecordDecl() && "not a record!");
 
   _w << "// ";
-  _typeNamePrinter.printCxxDiagnosticTypeName(type, _w);
+  _typeNamePrinter.printCxxTypeName(type, _w);
   _w << _w.endln() << "struct ";
   _typeNamePrinter.printTypeName(type, _w);
   _w << _w.endln() << '{' << _w.endln();
@@ -138,7 +138,7 @@ bool glsl::RecordBuilder::addBase(QualType type, unsigned index)
   }
   _typeNamePrinter.printTypeName(type, _w);
   _w << ' ' << "_base_" << index << "; // ";
-  _typeNamePrinter.printCxxDiagnosticTypeName(type, _w);
+  _typeNamePrinter.printCxxTypeName(type, _w);
   _w << _w.endln();
   return true;
 }
@@ -194,69 +194,6 @@ void glsl::RecordBuilder::printFieldImpl(QualType type, llvm::StringRef identifi
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-// GlslFunctionBuilder
-//
-
-//namespace
-//{
-//  class GlslFunctionBuilder
-//  {
-//  public:
-//    GlslFunctionBuilder(FunctionDecl& decl, MangleContext& mangler,
-//                        ShaderTranslator& translator, ASTContext& ast);
-//
-//    void finalize();
-//
-//    std::string declaration() { return std::move(_decl); }
-//    std::string definition() { return std::move(_def); }
-//
-//  private:
-//    std::string _decl;
-//    std::string _def;
-//    raw_string_ostream _ostream{_def};
-//    IndentWriter _w{_ostream};
-//    MangleContext& _mangler;
-//    ShaderTranslator& _translator;
-//    ASTContext& _ast;
-//  };
-//}
-//
-//GlslFunctionBuilder::GlslFunctionBuilder(FunctionDecl& decl, MangleContext& mangler,
-//                                         ShaderTranslator& translator, ASTContext& ast)
-//: _mangler(mangler)
-//, _translator(translator)
-//, _ast(ast)
-//{
-//  {
-//    // Build the decl first and re-use it for the definition as they are the same
-//    raw_string_ostream out{_decl};
-//    out << "// ";
-//    decl.getNameForDiagnostic(out, _ast.getPrintingPolicy(), true);
-//    out << '\n';
-//
-//    IndentWriter w{out};
-//    printTypeName(decl.getReturnType(), mangler, translator, w);
-//    w << ' ';
-//    _mangler.mangleCXXName(&decl, w.ostream());
-//    w << '(';
-//    bool first = true;
-//    for(const auto* param : decl.params())
-//    {
-//      if(!first)
-//        w << ", ";
-//      first = false;
-//      printTypeName(param->getType(), mangler, translator, w);
-//      w << param->getName();
-//    }
-//    w << ')';
-//  }
-//  _def = _decl;
-//  _decl += ";\n";
-//
-//  _def += '\n';
-//}
-
-////////////////////////////////////////////////////////////////////////////////
 // ModuleBuilder
 //
 
@@ -265,30 +202,17 @@ glsl::ModuleBuilder::ModuleBuilder(ASTContext& ast)
 {
 }
 
-bool glsl::ModuleBuilder::buildRecord(QualType type, std::function<void(lava::RecordBuilder&)>& blueprint)
+template<class Director>
+bool glsl::ModuleBuilder::buildRecord(QualType type, Director director)
 {
-  RecordBuilderImpl<RecordBuilder> builder{type, _typeNamePrinter};
-  blueprint(builder);
-  if(builder.success())
+  RecordBuilder builder{type, _typeNamePrinter};
+  auto success = director(builder);
+  if(success)
   {
-    _records.defs += builder->finalize();
+    _records.defs += builder.finalize();
   }
-  return builder.success();
+  return success;
 }
-
-//FunctionBuilder& GlslModuleBuilder::beginFunction(FunctionDecl& decl)
-//{
-//  _functions.builder.emplace(decl);
-//  return *_functions.builder;
-//}
-
-//void GlslModuleBuilder::endFunction()
-//{
-//  assert(_functions.builder && "beginFunction() not called before endFunction()");
-//  _functions.decls += _functions.builder->declaration();
-//  _functions.defs += _functions.builder->definition();
-//  _functions.builder.reset();
-//}
 
 std::string glsl::ModuleBuilder::moduleContent()
 {

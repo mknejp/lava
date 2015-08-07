@@ -47,7 +47,7 @@ public:
   }
 
   void printTypeName(QualType type, IndentWriter& w);
-  void printCxxDiagnosticTypeName(QualType type, IndentWriter& w);
+  void printCxxTypeName(QualType type, IndentWriter& w);
 
 private:
   void printDimensionality(unsigned n, IndentWriter& w);
@@ -85,8 +85,8 @@ public:
 
   std::string moduleContent();
 
-  bool buildRecord(QualType type, std::function<void(lava::RecordBuilder&)>& blueprint);
-//  FunctionBuilder beginFunction(FunctionDecl& decl);
+  template<class Director>
+  bool buildRecord(QualType type, Director director);
 
 private:
   // The definitions for all kinds of symbols are clustered together and we

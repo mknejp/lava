@@ -26,8 +26,6 @@ namespace clang
     class FunctionBuilder;
     class ModuleBuilder;
     class RecordBuilder;
-    template<class Builder>
-    class RecordBuilderImpl;
 
     bool buildModule(ShaderContext& context, ModuleBuilder& builder, ShaderStage stage);
     
@@ -62,9 +60,13 @@ protected:
   RecordBuilder& operator=(const RecordBuilder&) = default;
   RecordBuilder& operator=(RecordBuilder&&) = default;
 
+private:
+  template<class T>
+  class Impl;
+  friend ModuleBuilder;
+
   bool success() const { return _success; }
 
-private:
   virtual auto addBaseImpl(QualType type, unsigned index) -> bool = 0;
   virtual auto addFieldImpl(QualType type, llvm::StringRef identifier) -> bool = 0;
   virtual auto addCaptureImpl(QualType type, llvm::StringRef identifier) -> bool = 0;
@@ -75,22 +77,17 @@ private:
 };
 
 template<class T>
-class clang::lava::RecordBuilderImpl final : public RecordBuilder
+class clang::lava::RecordBuilder::Impl final : public RecordBuilder
 {
 public:
-  template<class... Args>
-  RecordBuilderImpl(Args&&... args) : _theBuilder(std::forward<Args>(args)...) { }
-
-  T& operator*() { return _theBuilder; }
-  T* operator->() { return &_theBuilder; }
-  using RecordBuilder::success;
+  Impl(T& target) : _target(target) { }
 
 private:
-  auto addBaseImpl(QualType type, unsigned index) -> bool final { return _theBuilder.addBase(type, index); }
-  auto addFieldImpl(QualType type, llvm::StringRef identifier) -> bool final { return _theBuilder.addField(type, identifier); }
-  auto addCaptureImpl(QualType type, llvm::StringRef identifier) -> bool final { return _theBuilder.addCapture(type, identifier); }
+  auto addBaseImpl(QualType type, unsigned index) -> bool final { return _target.addBase(type, index); }
+  auto addFieldImpl(QualType type, llvm::StringRef identifier) -> bool final { return _target.addField(type, identifier); }
+  auto addCaptureImpl(QualType type, llvm::StringRef identifier) -> bool final { return _target.addCapture(type, identifier); }
 
-  T _theBuilder;
+  T& _target;
 };
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -107,43 +104,63 @@ public:
   }
 
   template<class F>
-  auto buildRecord(QualType type, F&& blueprint) -> bool
+  auto buildRecord(QualType type, F&& director) -> bool
   {
-    auto f = std::function<void(RecordBuilder&)>{std::forward<F>(blueprint)};
+    auto f = std::function<void(RecordBuilder&)>{std::forward<F>(director)};
     return _target->buildRecord(type, f);
   }
-//  auto beginFunction(FunctionDecl& decl) -> FunctionBuilder& { return _target->beginFunction(decl); }
   // Can be text or binary and is the full module content to be written to a file
   auto moduleContent() -> std::string { return _target->moduleContent(); }
 
 private:
-  struct Concept
+  class Concept
   {
+  public:
     virtual ~Concept();
 
-    virtual auto buildRecord(QualType type, std::function<void(RecordBuilder&)>& f) -> bool = 0;
-//    virtual auto beginFunction(FunctionDecl& decl) -> FunctionBuilder& = 0;
+    virtual auto buildRecord(QualType type, std::function<void(RecordBuilder&)>& director) -> bool = 0;
     virtual auto moduleContent() -> std::string = 0;
   };
 
   template<class T>
-  struct Model : Concept
-  {
-    template<class... Args>
-    Model(Args&&... args) : target(std::forward<Args>(args)...) { }
-    T target;
-
-    auto buildRecord(QualType type, std::function<void(RecordBuilder&)>& f) -> bool override
-    {
-      return target.buildRecord(type, f);
-    }
-//    auto beginFunction(FunctionDecl& decl) -> FunctionBuilder& override { return target.beginFunction(decl); }
-    auto moduleContent() -> std::string override { return target.moduleContent(); }
-  };
+  class Model;
 
   ModuleBuilder(std::unique_ptr<Concept> ptr) : _target(std::move(ptr)) { }
 
   std::unique_ptr<Concept> _target;
+};
+
+template<class T>
+class clang::lava::ModuleBuilder::Model : public Concept
+{
+public:
+  template<class... Args>
+  Model(Args&&... args) : _target(std::forward<Args>(args)...) { }
+
+  auto buildRecord(QualType type, std::function<void(RecordBuilder&)>& director) -> bool override
+  {
+    return _target.buildRecord(type, DirectorInvoker<RecordBuilder>{_target, director});
+  }
+
+  auto moduleContent() -> std::string override { return _target.moduleContent(); }
+
+private:
+  template<class Builder>
+  struct DirectorInvoker
+  {
+    T& target;
+    std::function<void(Builder&)>& director;
+
+    template<class RealBuilder>
+    bool operator()(RealBuilder& builder) const
+    {
+      typename Builder::template Impl<RealBuilder> b{builder};
+      director(b);
+      return b.success();
+    }
+  };
+
+  T _target;
 };
 
 #endif // LLVM_CLANG_LAVA_MODULEBUILDER_H

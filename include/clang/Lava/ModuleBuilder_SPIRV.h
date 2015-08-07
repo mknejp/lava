@@ -42,6 +42,8 @@ public:
   spv::Id get(QualType type) const;
   spv::Id operator[](QualType type) const { return get(type); }
 
+  spv::Builder& builder() const { return _builder; }
+
 private:
   // spv::Builder does not cache struct types in makeStructType()
   llvm::DenseMap<CXXRecordDecl*, spv::Id> _builtRecords;
@@ -51,7 +53,7 @@ private:
 class clang::lava::spirv::RecordBuilder
 {
 public:
-  RecordBuilder(QualType type, ModuleBuilder& module);
+  RecordBuilder(QualType type, TypeCache& types, ASTContext& ast);
 
   bool addBase(QualType type, unsigned index);
   bool addField(QualType type, llvm::StringRef identifier);
@@ -59,7 +61,8 @@ public:
   spv::Id finalize();
 
 private:
-  ModuleBuilder& _module;
+  TypeCache& _types;
+  ASTContext& _ast;
   std::vector<spv::Id> _members;
   std::vector<std::string> _names;
   std::string _name;
@@ -73,13 +76,8 @@ public:
 
   std::string moduleContent();
 
-  bool buildRecord(QualType type, std::function<void(lava::RecordBuilder&)>& blueprint);
-
-  ASTContext& ast() const { return _ast; }
-  spv::Builder& builder() { return _builder; }
-  TypeCache& types() { return _types; }
-
-  void appendRecord(CXXRecordDecl* decl, spv::Id id);
+  template<class Director>
+  bool buildRecord(QualType type, Director director);
 
 private:
   ASTContext& _ast;
