@@ -20,6 +20,7 @@ namespace clang
 {
   class ASTContext;
   class DiagnosticsEngine;
+  class IntegerLiteral;
   class ParmVarDecl;
 
   namespace lava
@@ -27,11 +28,35 @@ namespace clang
     class FunctionBuilder;
     class ModuleBuilder;
     class RecordBuilder;
+    class StmtBuilder;
+
+    template<class Target, class Builder>
+    struct DirectorInvoker;
 
     bool buildModule(ShaderContext& context, ModuleBuilder& builder, ShaderStage stage);
-    
+
   } // end namespace lava
 } // end namespace clang
+
+// This is used everywhere a method of an actual builder implementation has to
+// create a new child builder on the stack and pass it as argument to the user-
+// provided director callback taking the type-erased base class for the new
+// child builder. This pattern allows us to save lots of allocations and enables
+// a "recursive descend"-like code generation model.
+template<class Target, class Builder>
+struct clang::lava::DirectorInvoker
+{
+  Target& target;
+  std::function<void(Builder&)>& director;
+
+  template<class RealBuilder>
+  bool operator()(RealBuilder& builder) const
+  {
+    typename Builder::template Impl<RealBuilder> b{builder};
+    director(b);
+    return b.success();
+  }
+};
 
 ////////////////////////////////////////////////////////////////////////////////
 // RecordBuilder
@@ -64,7 +89,8 @@ protected:
 private:
   template<class T>
   class Impl;
-  friend ModuleBuilder;
+  template<class Target, class Director>
+  friend struct DirectorInvoker;
 
   bool success() const { return _success; }
 
@@ -92,30 +118,106 @@ private:
 };
 
 ////////////////////////////////////////////////////////////////////////////////
+// StmtBuilder
+//
+
+class clang::lava::StmtBuilder
+{
+public:
+  bool emitIntegerLiteral(const IntegerLiteral& literal)
+  {
+    return _success = _success && emitIntegerLiteralImpl(literal);
+  }
+
+protected:
+  StmtBuilder() = default;
+  ~StmtBuilder() = default;
+  StmtBuilder(const StmtBuilder&) = default;
+  StmtBuilder(StmtBuilder&&) = default;
+  StmtBuilder& operator=(const StmtBuilder&) = default;
+  StmtBuilder& operator=(StmtBuilder&&) = default;
+
+private:
+  template<class T>
+  class Impl;
+  template<class Target, class Director>
+  friend struct DirectorInvoker;
+
+  bool success() const { return _success; }
+
+  virtual bool emitIntegerLiteralImpl(const IntegerLiteral& literal) = 0;
+
+  virtual void vftbl();
+
+  bool _success = true;
+};
+
+template<class T>
+class clang::lava::StmtBuilder::Impl final : public StmtBuilder
+{
+public:
+  Impl(T& target) : _target(target) { }
+
+private:
+  bool emitIntegerLiteralImpl(const IntegerLiteral& literal) override { return _target.emitIntegerLiteral(literal); }
+
+  T& _target;
+};
+
+////////////////////////////////////////////////////////////////////////////////
 // FunctionBuilder
 //
 
 class clang::lava::FunctionBuilder
 {
 public:
+  /// \name Function header setup
+  /// @{
+
+  /// Specify the function's return type (must be called exactly once before opening the function scope)
   bool setReturnType(QualType type)
   {
     return _success = _success && setReturnTypeImpl(type);
   }
-  bool addParam(ParmVarDecl* param)
+  /// Add a new formal parameter to the function, optional.
+  bool addParam(const ParmVarDecl& param)
   {
     return _success = _success && addParamImpl(param);
   }
+
+  /// @}
+  /// \name Concent building
+  /// @{
+
+  /// Build a new statement that is not the declaration of a new variable
   template<class F>
-  bool pushScope(F director, decltype(std::declval<F>()(std::declval<FunctionBuilder&>()))* = nullptr)
+  bool buildStmt(F&& director)
   {
-    if(_success)
-    {
-      auto f = std::function<void(FunctionBuilder&)>{std::forward<F>(director)};
-      _success = _success && pushScopeImpl(f);
-    }
-    return _success;
+    auto f = std::function<void(StmtBuilder&)>{std::forward<F>(director)};
+    return _success = _success && buildStmtImpl(f);
   }
+  /// Declare a single new local variable with no definition.
+  bool declareUndefinedVar(const VarDecl& var)
+  {
+    return _success = _success && declareUndefinedVarImpl(var);
+  }
+  /// Declare a single new local variable with its definition provided by a statement built by \p director.
+  template<class F>
+  bool declareVar(const VarDecl& var, F&& director)
+  {
+    auto f = std::function<void(StmtBuilder&)>{std::forward<F>(director)};
+    return _success = _success && declareVarImpl(var, f);
+  }
+  /// Open a new local scope.
+  /// At least one scope must be opened for a function that is not imported, even if it is trivial.
+  template<class F>
+  bool pushScope(F&& director)
+  {
+    auto f = std::function<void(FunctionBuilder&)>{std::forward<F>(director)};
+    return _success = _success && pushScopeImpl(f);
+  }
+
+  /// @}
 
 protected:
   FunctionBuilder() = default;
@@ -128,13 +230,17 @@ protected:
 private:
   template<class T>
   class Impl;
-  friend ModuleBuilder;
+  template<class Target, class Director>
+  friend struct DirectorInvoker;
 
   bool success() const { return _success; }
 
-  virtual bool setReturnTypeImpl(QualType type) = 0;
-  virtual bool addParamImpl(ParmVarDecl* param) = 0;
+  virtual bool addParamImpl(const ParmVarDecl& param) = 0;
+  virtual bool buildStmtImpl(std::function<void(StmtBuilder&)>& director) = 0;
+  virtual bool declareUndefinedVarImpl(const VarDecl& var) = 0;
+  virtual bool declareVarImpl(const VarDecl& var, std::function<void(StmtBuilder&)>& director) = 0;
   virtual bool pushScopeImpl(std::function<void(FunctionBuilder&)>& director) = 0;
+  virtual bool setReturnTypeImpl(QualType type) = 0;
 
   virtual void vftbl();
 
@@ -148,15 +254,29 @@ public:
   Impl(T& target) : _target(target) { }
 
 private:
-  bool setReturnTypeImpl(QualType type) override { return _target.setReturnType(type); }
-  bool addParamImpl(ParmVarDecl* param) override  { return _target.addParam(param); }
+  bool addParamImpl(const ParmVarDecl& param) override
+  {
+    return _target.addParam(param);
+  }
+  bool buildStmtImpl(std::function<void(StmtBuilder&)>& director) override
+  {
+    return _target.buildStmt(DirectorInvoker<T, StmtBuilder>{_target, director});
+  }
+  bool declareUndefinedVarImpl(const VarDecl& var) override
+  {
+    return _target.declareUndefinedVar(var);
+  }
+  bool declareVarImpl(const VarDecl& var, std::function<void(StmtBuilder&)>& director) override
+  {
+    return _target.declareVar(var, DirectorInvoker<T, StmtBuilder>{_target, director});
+  }
   bool pushScopeImpl(std::function<void(FunctionBuilder&)>& director) override
   {
-    return _target.pushScope([this, &director]
-    {
-      director(*this);
-      return success();
-    });
+    return _target.pushScope([this, &director] { director(*this); return success(); });
+  }
+  bool setReturnTypeImpl(QualType type) override
+  {
+    return _target.setReturnType(type);
   }
 
   T& _target;
@@ -218,31 +338,15 @@ public:
 
   auto buildRecord(QualType type, std::function<void(RecordBuilder&)>& director) -> bool override
   {
-    return _target.buildRecord(type, DirectorInvoker<RecordBuilder>{_target, director});
+    return _target.buildRecord(type, DirectorInvoker<T, RecordBuilder>{_target, director});
   }
 
   auto buildFunction(FunctionDecl& decl, std::function<void(FunctionBuilder&)>& director) -> bool override
   {
-    return _target.buildFunction(decl, DirectorInvoker<FunctionBuilder>{_target, director});
+    return _target.buildFunction(decl, DirectorInvoker<T, FunctionBuilder>{_target, director});
   }
 
   auto moduleContent() -> std::string override { return _target.moduleContent(); }
-
-private:
-  template<class Builder>
-  struct DirectorInvoker
-  {
-    T& target;
-    std::function<void(Builder&)>& director;
-
-    template<class RealBuilder>
-    bool operator()(RealBuilder& builder) const
-    {
-      typename Builder::template Impl<RealBuilder> b{builder};
-      director(b);
-      return b.success();
-    }
-  };
 
   T _target;
 };

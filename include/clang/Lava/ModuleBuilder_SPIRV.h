@@ -30,6 +30,7 @@ namespace clang
       class FunctionBuilder;
       class ModuleBuilder;
       class RecordBuilder;
+      class StmtBuilder;
       class TypeCache;
     }
   }
@@ -72,15 +73,32 @@ private:
   CXXRecordDecl* _decl;
 };
 
+class clang::lava::spirv::StmtBuilder
+{
+public:
+  bool emitIntegerLiteral(const IntegerLiteral& literal) { return true; }
+
+private:
+};
 class clang::lava::spirv::FunctionBuilder
 {
 public:
   FunctionBuilder(FunctionDecl& decl, TypeCache& types, TypeMangler& mangler);
 
-  bool setReturnType(QualType type);
-  bool addParam(ParmVarDecl* param);
+  bool addParam(const ParmVarDecl& param);
+
+  template<class F>
+  bool buildStmt(F director);
+
+  bool declareUndefinedVar(const VarDecl& var);
+
+  template<class F>
+  bool declareVar(const VarDecl& var, F director);
+
   template<class F>
   bool pushScope(F director);
+
+  bool setReturnType(QualType type);
 
   spv::Id finalize();
 
@@ -92,7 +110,7 @@ private:
   FunctionDecl& _decl;
   spv::Id _returnType = 0;
   spv::Function* _function = nullptr;
-  std::vector<ParmVarDecl*> _params;
+  std::vector<const ParmVarDecl*> _params;
 };
 
 class clang::lava::spirv::ModuleBuilder

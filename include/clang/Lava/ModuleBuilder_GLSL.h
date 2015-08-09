@@ -34,6 +34,7 @@ namespace clang
       class FunctionBuilder;
       class ModuleBuilder;
       class RecordBuilder;
+      class StmtBuilder;
       class TypeNamePrinter;
     }
   }
@@ -81,15 +82,45 @@ private:
   bool _printedCapturesHeader : 1;
 };
 
+class clang::lava::glsl::StmtBuilder
+{
+public:
+  StmtBuilder(TypeNamePrinter& typeNamePrinter);
+
+  bool emitIntegerLiteral(const IntegerLiteral& literal);
+
+  llvm::StringRef expr() const { return _expr; }
+
+private:
+  TypeNamePrinter& _typeNamePrinter;
+  // This field is used to transport the results of subexpressions back to the
+  // caller. We cannot use return values since the control flow is not under
+  // our direct control.
+  // It is overwritten by every subexpression and must be used/saved before
+  // descending into a new subexpression.
+  std::string _expr;
+  llvm::raw_string_ostream _out{_expr};
+};
+
 class clang::lava::glsl::FunctionBuilder
 {
 public:
   FunctionBuilder(FunctionDecl& decl, TypeNamePrinter& typeNamePrinter);
 
-  bool setReturnType(QualType type);
-  bool addParam(ParmVarDecl* param);
+  bool addParam(const ParmVarDecl& param);
+
+  template<class F>
+  bool buildStmt(F director);
+
+  bool declareUndefinedVar(const VarDecl& var);
+
+  template<class F>
+  bool declareVar(const VarDecl& var, F director);
+
   template<class F>
   bool pushScope(F director);
+  
+  bool setReturnType(QualType type);
 
   void finalize();
 
@@ -107,7 +138,7 @@ private:
 
   FunctionDecl& _decl;
   QualType _returnType;
-  std::vector<ParmVarDecl*> _formalParams;
+  std::vector<const ParmVarDecl*> _formalParams;
 };
 
 class clang::lava::glsl::ModuleBuilder

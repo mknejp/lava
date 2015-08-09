@@ -9,6 +9,7 @@
 
 #include "clang/Lava/ModuleBuilder_GLSL.h"
 
+#include "clang/AST/Expr.h"
 #include "clang/AST/DeclCXX.h"
 #include "clang/Lava/CodePrintingTools.h"
 #include "clang/Lava/ModuleBuilder.h"
@@ -205,7 +206,23 @@ void glsl::RecordBuilder::printFieldImpl(QualType type, llvm::StringRef identifi
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-// GlslFunctionBuilder
+// StmtBuilder
+//
+
+glsl::StmtBuilder::StmtBuilder(TypeNamePrinter& typeNamePrinter)
+: _typeNamePrinter(typeNamePrinter)
+{
+}
+
+bool glsl::StmtBuilder::emitIntegerLiteral(const IntegerLiteral& literal)
+{
+  literal.getValue().print(_out, false);
+  _out.flush();
+  return true;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// FunctionBuilder
 //
 
 glsl::FunctionBuilder::FunctionBuilder(FunctionDecl& decl, TypeNamePrinter& typeNamePrinter)
@@ -214,17 +231,45 @@ glsl::FunctionBuilder::FunctionBuilder(FunctionDecl& decl, TypeNamePrinter& type
 {
 }
 
-bool glsl::FunctionBuilder::setReturnType(QualType type)
+bool glsl::FunctionBuilder::addParam(const ParmVarDecl& param)
 {
-  assert(_returnType.isNull() && "return type already set");
-  _returnType = type;
+  _formalParams.push_back(&param);
   return true;
 }
 
-bool glsl::FunctionBuilder::addParam(ParmVarDecl* param)
+template<class F>
+bool glsl::FunctionBuilder::buildStmt(F director)
 {
-  _formalParams.push_back(param);
+  StmtBuilder stmt{_typeNamePrinter};
+  if(director(stmt))
+  {
+    if(!stmt.expr().empty())
+    {
+      _w << stmt.expr() << ';' << _w.endln();
+    }
+    return true;
+  }
+  return false;
+}
+
+bool glsl::FunctionBuilder::declareUndefinedVar(const VarDecl& var)
+{
+  _typeNamePrinter.printTypeName(var.getType(), _w);
+  _w << ' ' << var.getName() << ';' << _w.endln();
   return true;
+}
+
+template<class F>
+bool glsl::FunctionBuilder::declareVar(const VarDecl& var, F director)
+{
+  StmtBuilder stmt{_typeNamePrinter};
+  if(director(stmt))
+  {
+    _typeNamePrinter.printTypeName(var.getType(), _w);
+    _w << ' ' << var.getName() << " = " << stmt.expr() << ';' << _w.endln();
+    return true;
+  }
+  return false;
 }
 
 template<class F>
@@ -246,6 +291,13 @@ bool glsl::FunctionBuilder::pushScope(F director)
   }
   else
     return false;
+}
+
+bool glsl::FunctionBuilder::setReturnType(QualType type)
+{
+  assert(_returnType.isNull() && "return type already set");
+  _returnType = type;
+  return true;
 }
 
 void glsl::FunctionBuilder::finalize()

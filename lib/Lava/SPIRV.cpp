@@ -152,17 +152,37 @@ spirv::FunctionBuilder::FunctionBuilder(FunctionDecl& decl, TypeCache& types, Ty
 {
 }
 
-bool spirv::FunctionBuilder::setReturnType(QualType type)
+bool spirv::FunctionBuilder::addParam(const ParmVarDecl& param)
 {
-  assert(_returnType == 0 && "return type already set");
-  _returnType = _types[type];
+  _params.push_back(&param);
   return true;
 }
 
-bool spirv::FunctionBuilder::addParam(ParmVarDecl* param)
+template<class F>
+bool spirv::FunctionBuilder::buildStmt(F director)
 {
-  _params.push_back(param);
+  StmtBuilder stmt;
+  if(director(stmt))
+  {
+    return true;
+  }
+  return false;
+}
+
+bool spirv::FunctionBuilder::declareUndefinedVar(const VarDecl& var)
+{
   return true;
+}
+
+template<class F>
+bool spirv::FunctionBuilder::declareVar(const VarDecl& var, F director)
+{
+  StmtBuilder stmt;
+  if(director(stmt))
+  {
+    return true;
+  }
+  return false;
 }
 
 template<class F>
@@ -206,6 +226,13 @@ bool spirv::FunctionBuilder::pushScope(F director)
   // We don't need any extra setup for a new scope, just continue the existing block.
   // It's an aspect of the frontend we don't have to care about.
   return director();
+}
+
+bool spirv::FunctionBuilder::setReturnType(QualType type)
+{
+  assert(_returnType == 0 && "return type already set");
+  _returnType = _types[type];
+  return true;
 }
 
 spv::Id spirv::FunctionBuilder::finalize()

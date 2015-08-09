@@ -11,7 +11,10 @@
 
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/DeclCXX.h"
+#include "clang/AST/DeclVisitor.h"
+#include "clang/AST/Expr.h"
 #include "clang/AST/Mangle.h"
+#include "clang/AST/StmtVisitor.h"
 #include "clang/Lava/IndentWriter.h"
 #include "clang/lava/GLSL.h"
 
@@ -20,7 +23,110 @@ using namespace lava;
 
 ModuleBuilder::Concept::~Concept() = default;
 void RecordBuilder::vftbl() { }
+void StmtBuilder::vftbl() { }
 void FunctionBuilder::vftbl() { }
+
+////////////////////////////////////////////////////////////////////////////////
+// Visitors
+//
+
+namespace
+{
+  // Visitor for the possible top-level nodes of a function scope.
+  class FunctionVisitor
+  : public ConstStmtVisitor<FunctionVisitor>
+  , public ConstDeclVisitor<FunctionVisitor>
+  {
+  public:
+    using StmtVisitor = ConstStmtVisitor<FunctionVisitor>;
+    using DeclVisitor = ConstDeclVisitor<FunctionVisitor>;
+
+    FunctionVisitor(FunctionBuilder& builder) : _builder(builder) { }
+
+    // Statements
+    void VisitCompoundStmt(const CompoundStmt* stmt);
+    void VisitDeclStmt(const DeclStmt* stmt);
+
+    // Declarations
+    void VisitVarDecl(const VarDecl* decl);
+
+    // Expressions
+    void VisitExpr(const Expr* expr);
+
+  private:
+    FunctionBuilder& _builder;
+  };
+
+  // Visitor for all nodes that could be in an expression
+  class ExprVisitor : public ConstStmtVisitor<ExprVisitor>
+  {
+  public:
+    ExprVisitor(StmtBuilder& stmt) : _builder(stmt) { }
+
+    void VisitIntegerLiteral(const IntegerLiteral* expr);
+
+  private:
+    StmtBuilder& _builder;
+  };
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// FunctionVisitor
+//
+
+void FunctionVisitor::VisitCompoundStmt(const CompoundStmt* stmt)
+{
+  _builder.pushScope([stmt, this] (FunctionBuilder& builder)
+  {
+    for(const auto* stmt : stmt->body())
+    {
+      StmtVisitor::Visit(stmt);
+    }
+  });
+}
+
+void FunctionVisitor::VisitDeclStmt(const DeclStmt* stmt)
+{
+  for(const auto* decl : stmt->decls())
+  {
+    DeclVisitor::Visit(decl);
+  }
+}
+
+void FunctionVisitor::VisitVarDecl(const VarDecl* decl)
+{
+  if(!decl->isStaticLocal())
+  {
+    if(const auto* init = decl->getInit())
+    {
+      _builder.declareVar(*decl, [init] (StmtBuilder& builder)
+      {
+        ExprVisitor{builder}.Visit(init);
+      });
+    }
+    else
+      _builder.declareUndefinedVar(*decl);
+  }
+  else
+    llvm_unreachable("function local statics not implemented");
+}
+
+void FunctionVisitor::VisitExpr(const Expr* expr)
+{
+  _builder.buildStmt([expr] (StmtBuilder& builder)
+  {
+    ExprVisitor{builder}.Visit(expr);
+  });
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// ExprVisitor
+//
+
+void ExprVisitor::VisitIntegerLiteral(const IntegerLiteral* expr)
+{
+  _builder.emitIntegerLiteral(*expr);
+}
 
 ////////////////////////////////////////////////////////////////////////////////
 // buildModule
@@ -85,27 +191,25 @@ namespace
     });
   }
 
-  bool buildFunction(FunctionDecl& decl, FunctionBuilder& builder)
+  void buildFunction(FunctionDecl& decl, FunctionBuilder& builder)
   {
     builder.setReturnType(decl.getReturnType());
     // We feed the arguments individually in case we have to transform them
     for(auto* param : decl.params())
     {
-      builder.addParam(param);
+      builder.addParam(*param);
     }
-    builder.pushScope([&] (FunctionBuilder& builder) { });
-    return true;
+    FunctionVisitor{builder}.StmtVisitor::Visit(decl.getBody());
   }
 
-  bool buildFunctions(ShaderContext& context, ModuleBuilder& module, ShaderStage stage)
+  void buildFunctions(ShaderContext& context, ModuleBuilder& module, ShaderStage stage)
   {
-    return for_each_entity(stage, context.functions, [&] (EmittedFunction& f)
+    for_each_entity(stage, context.functions, [&] (EmittedFunction& f)
     {
       return module.buildFunction(*f.decl, [&f] (FunctionBuilder& builder)
       {
         buildFunction(*f.decl, builder);
       });
-      return false;
     });
   }
 }

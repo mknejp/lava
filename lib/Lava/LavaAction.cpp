@@ -322,24 +322,24 @@ private:
       func.decl->dump();
     }
 
-    _ctx.vertexFunction->getNameForDiagnostic(llvm::errs(), _ci.getASTContext().getPrintingPolicy(), true);
-    llvm::errs() << '\n';
-    _ctx.vertexFunction->dump();
+//    _ctx.vertexFunction->getNameForDiagnostic(llvm::errs(), _ci.getASTContext().getPrintingPolicy(), true);
+//    llvm::errs() << '\n';
+//    _ctx.vertexFunction->dump();
     {
       // GLSL
       auto module = glsl::createModuleBuilder(_ci.getASTContext());
       buildModule(_ctx, module, ShaderStage::vertex);
       llvm::errs() << module.moduleContent();
     }
-    llvm::errs() << "====================\n";
-    {
-      // SPIR-V
-      spv::Parameterize();
-      GLSL_STD_450::GetDebugNames(GlslStd450DebugNames);
-      auto module = spirv::createModuleBuilder(_ci.getASTContext());
-      buildModule(_ctx, module, ShaderStage::vertex);
-      printSpirv(module.moduleContent());
-    }
+//    llvm::errs() << "====================\n";
+//    {
+//      // SPIR-V
+//      spv::Parameterize();
+//      GLSL_STD_450::GetDebugNames(GlslStd450DebugNames);
+//      auto module = spirv::createModuleBuilder(_ci.getASTContext());
+//      buildModule(_ctx, module, ShaderStage::vertex);
+//      printSpirv(module.moduleContent());
+//    }
 
     printEntry("vert", _ctx.vertexFunction);
     printEntry("frag", _ctx.fragmentFunction);
