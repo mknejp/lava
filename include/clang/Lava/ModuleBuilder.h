@@ -20,7 +20,9 @@ namespace clang
 {
   class ASTContext;
   class BinaryOperator;
+  class CXXBoolLiteralExpr;
   class DiagnosticsEngine;
+  class FloatingLiteral;
   class IntegerLiteral;
   class ParmVarDecl;
   class UnaryOperator;
@@ -135,6 +137,14 @@ public:
     auto rhs = Director{std::forward<RHS>(rhsDirector)};
     return _success = _success && emitBinaryOperatorImpl(expr, lhs, rhs);
   }
+  bool emitBooleanLiteral(const CXXBoolLiteralExpr& expr)
+  {
+    return _success = _success && emitBooleanLiteralImpl(expr);
+  }
+  bool emitFloatingLiteral(const FloatingLiteral& expr)
+  {
+    return _success = _success && emitFloatingLiteralImpl(expr);
+  }
   bool emitIntegerLiteral(const IntegerLiteral& expr)
   {
     return _success = _success && emitIntegerLiteralImpl(expr);
@@ -163,6 +173,8 @@ private:
   bool success() const { return _success; }
 
   virtual bool emitBinaryOperatorImpl(const BinaryOperator& expr, Director& lhs, Director& rhs) = 0;
+  virtual bool emitBooleanLiteralImpl(const CXXBoolLiteralExpr& expr) = 0;
+  virtual bool emitFloatingLiteralImpl(const FloatingLiteral& expr) = 0;
   virtual bool emitIntegerLiteralImpl(const IntegerLiteral& expr) = 0;
   virtual bool emitUnaryOperatorImpl(const UnaryOperator& expr, Director& subexpr) = 0;
 
@@ -183,6 +195,14 @@ private:
   bool emitBinaryOperatorImpl(const BinaryOperator& expr, Director& lhs, Director& rhs) override
   {
     return _target.emitBinaryOperator(expr, Invoke{_target, lhs}, Invoke{_target, rhs});
+  }
+  bool emitBooleanLiteralImpl(const CXXBoolLiteralExpr& expr) override
+  {
+    return _target.emitBooleanLiteral(expr);
+  }
+  bool emitFloatingLiteralImpl(const FloatingLiteral& expr) override
+  {
+    return _target.emitFloatingLiteral(expr);
   }
   bool emitIntegerLiteralImpl(const IntegerLiteral& expr) override
   {

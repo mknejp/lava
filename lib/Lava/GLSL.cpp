@@ -10,6 +10,7 @@
 #include "clang/Lava/ModuleBuilder_GLSL.h"
 
 #include "clang/AST/Expr.h"
+#include "clang/AST/ExprCXX.h"
 #include "clang/AST/DeclCXX.h"
 #include "clang/Lava/CodePrintingTools.h"
 #include "clang/Lava/ModuleBuilder.h"
@@ -224,6 +225,25 @@ bool glsl::StmtBuilder::emitBinaryOperator(const BinaryOperator& expr, RHS lhs, 
     return rhs(*this);
   }
   return false;
+}
+
+bool glsl::StmtBuilder::emitBooleanLiteral(const CXXBoolLiteralExpr& expr)
+{
+  printBoolLiteral(expr.getValue(), _w);
+  return true;
+}
+
+bool glsl::StmtBuilder::emitFloatingLiteral(const FloatingLiteral& expr)
+{
+//  llvm::SmallVector<char, 64> str;
+//  expr.getValue().toString(str);
+//  _w << llvm::StringRef{str.data(), str.size()};
+
+//  _w << expr.getValueAsApproximateDouble();
+
+  // TODO: suffixes only supported in some GLSL versions/extensions
+  printFloatingLiteral(expr, PrintFloatingSuffixFloat, _w);
+  return true;
 }
 
 bool glsl::StmtBuilder::emitIntegerLiteral(const IntegerLiteral& literal)

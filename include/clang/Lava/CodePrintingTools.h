@@ -23,12 +23,22 @@
 namespace clang
 {
   class ASTContext;
+  class FloatingLiteral;
   class FunctionDecl;
   class MangleContext;
 
   namespace lava
   {
     class IndentWriter;
+
+    enum PrintFloatingSuffix
+    {
+      PrintFloatingSuffixNone,
+      PrintFloatingSuffixHalf       = 1 << 0,
+      PrintFloatingSuffixFloat      = 1 << 1,
+      PrintFloatingSuffixDouble     = 1 << 2,
+      PrintFloatingSuffixLongDouble = 1 << 3,
+    };
 
     class TypeMangler
     {
@@ -52,6 +62,7 @@ namespace clang
     void printOperator(BinaryOperatorKind opcode, IndentWriter w);
     void printOperator(UnaryOperatorKind opcode, IndentWriter w);
     void printBoolLiteral(bool value, IndentWriter& w);
+    void printFloatingLiteral(const FloatingLiteral& literal, PrintFloatingSuffix suffix, IndentWriter& w);
   }
 }
 

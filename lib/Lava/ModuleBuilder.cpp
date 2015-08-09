@@ -64,6 +64,8 @@ namespace
     ExprVisitor(StmtBuilder& stmt) : _builder(stmt) { }
 
     void VisitBinaryOperator(const BinaryOperator* expr);
+    void VisitCXXBoolLiteralExpr(const CXXBoolLiteralExpr* expr);
+    void VisitFloatingLiteral(const FloatingLiteral* expr);
     void VisitIntegerLiteral(const IntegerLiteral* expr);
 
   private:
@@ -137,6 +139,16 @@ void ExprVisitor::VisitBinaryOperator(const BinaryOperator* expr)
                               {
                                 Visit(expr->getRHS());
                               });
+}
+
+void ExprVisitor::VisitCXXBoolLiteralExpr(const CXXBoolLiteralExpr* expr)
+{
+  _builder.emitBooleanLiteral(*expr);
+}
+
+void ExprVisitor::VisitFloatingLiteral(const FloatingLiteral* expr)
+{
+  _builder.emitFloatingLiteral(*expr);
 }
 
 void ExprVisitor::VisitIntegerLiteral(const IntegerLiteral* expr)

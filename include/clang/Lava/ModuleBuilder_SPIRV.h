@@ -21,6 +21,8 @@
 
 namespace clang
 {
+  class CXXBoolLiteralExpr;
+  
   namespace lava
   {
     class RecordBuilder;
@@ -78,9 +80,9 @@ class clang::lava::spirv::StmtBuilder
 public:
   template<class RHS, class LHS>
   bool emitBinaryOperator(const BinaryOperator& expr, RHS lhs, LHS rhs) { return true; }
-
+  bool emitBooleanLiteral(const CXXBoolLiteralExpr& expr) { return true; }
+  bool emitFloatingLiteral(const FloatingLiteral& expr) { return true; }
   bool emitIntegerLiteral(const IntegerLiteral& literal) { return true; }
-
   template<class F>
   bool emitUnaryOperator(const UnaryOperator& expr, F director) { return true; }
 

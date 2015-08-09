@@ -89,9 +89,9 @@ public:
 
   template<class RHS, class LHS>
   bool emitBinaryOperator(const BinaryOperator& expr, RHS lhs, LHS rhs);
-
+  bool emitBooleanLiteral(const CXXBoolLiteralExpr& expr);
+  bool emitFloatingLiteral(const FloatingLiteral& expr);
   bool emitIntegerLiteral(const IntegerLiteral& literal);
-
   template<class F>
   bool emitUnaryOperator(const UnaryOperator& expr, F director);
 

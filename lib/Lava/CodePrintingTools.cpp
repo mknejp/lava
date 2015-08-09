@@ -165,3 +165,42 @@ void clang::lava::printOperator(UnaryOperatorKind opcode, IndentWriter w)
       llvm_unreachable("operator not supported");
   }
 }
+
+void clang::lava::printBoolLiteral(bool value, IndentWriter& w)
+{
+  w << (value ? "true" : "false");
+}
+
+void clang::lava::printFloatingLiteral(const FloatingLiteral& literal, PrintFloatingSuffix suffix, IndentWriter& w)
+{
+  SmallString<16> str;
+  literal.getValue().toString(str);
+  w << str;
+  if (str.find_first_not_of("-0123456789") == StringRef::npos)
+  {
+    w << '.'; // Trailing dot in order to separate from ints.
+  }
+  if(suffix)
+  {
+    switch(literal.getType()->getAs<BuiltinType>()->getKind())
+    {
+      case BuiltinType::Half:
+        if(suffix & PrintFloatingSuffixHalf)
+        w << 'H';
+        break;
+      case BuiltinType::Float:
+        if(suffix & PrintFloatingSuffixFloat)
+          w << 'F';
+        break;
+      case BuiltinType::Double:
+        // no suffix
+        break;
+      case BuiltinType::LongDouble:
+        if(suffix & PrintFloatingSuffixLongDouble)
+          w << 'L';
+        break;
+      default:
+        llvm_unreachable("unexpected type for float literal");
+    }
+  }
+}
