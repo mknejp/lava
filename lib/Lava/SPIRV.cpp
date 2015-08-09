@@ -90,6 +90,18 @@ void spirv::TypeCache::add(CXXRecordDecl* decl, spv::Id id)
 }
 
 ////////////////////////////////////////////////////////////////////////////////
+// StmtBuilder
+//
+
+template<class F>
+bool spirv::StmtBuilder::emitParenExpr(F subexpr)
+{
+  // Don't care about parentheses.
+  // What matters is the order of evaluation.
+  return subexpr(*this);
+}
+
+////////////////////////////////////////////////////////////////////////////////
 // RecordBuilder
 //
 

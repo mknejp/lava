@@ -93,7 +93,9 @@ public:
   bool emitFloatingLiteral(const FloatingLiteral& expr);
   bool emitIntegerLiteral(const IntegerLiteral& literal);
   template<class F>
-  bool emitUnaryOperator(const UnaryOperator& expr, F director);
+  bool emitParenExpr(F subexpr);
+  template<class F>
+  bool emitUnaryOperator(const UnaryOperator& expr, F subexpr);
 
 private:
   TypeNamePrinter& _typeNamePrinter;

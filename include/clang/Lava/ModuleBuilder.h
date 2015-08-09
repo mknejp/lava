@@ -150,6 +150,12 @@ public:
     return _success = _success && emitIntegerLiteralImpl(expr);
   }
   template<class F>
+  bool emitParenExpr(F&& subexpr)
+  {
+    auto f = Director{std::forward<F>(subexpr)};
+    return _success = _success && emitParenExprImpl(f);
+  }
+  template<class F>
   bool emitUnaryOperator(const UnaryOperator& expr, F&& subexpr)
   {
     auto f = Director{std::forward<F>(subexpr)};
@@ -176,6 +182,7 @@ private:
   virtual bool emitBooleanLiteralImpl(const CXXBoolLiteralExpr& expr) = 0;
   virtual bool emitFloatingLiteralImpl(const FloatingLiteral& expr) = 0;
   virtual bool emitIntegerLiteralImpl(const IntegerLiteral& expr) = 0;
+  virtual bool emitParenExprImpl(Director& subexpr) = 0;
   virtual bool emitUnaryOperatorImpl(const UnaryOperator& expr, Director& subexpr) = 0;
 
   virtual void vftbl();
@@ -207,6 +214,10 @@ private:
   bool emitIntegerLiteralImpl(const IntegerLiteral& expr) override
   {
     return _target.emitIntegerLiteral(expr);
+  }
+  virtual bool emitParenExprImpl(Director& subexpr) override
+  {
+    return _target.emitParenExpr(Invoke{_target, subexpr});
   }
   virtual bool emitUnaryOperatorImpl(const UnaryOperator& expr, Director& subexpr) override
   {

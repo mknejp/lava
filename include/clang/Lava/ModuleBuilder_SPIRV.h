@@ -84,6 +84,8 @@ public:
   bool emitFloatingLiteral(const FloatingLiteral& expr) { return true; }
   bool emitIntegerLiteral(const IntegerLiteral& literal) { return true; }
   template<class F>
+  bool emitParenExpr(F subexpr);
+  template<class F>
   bool emitUnaryOperator(const UnaryOperator& expr, F director) { return true; }
 
 private:

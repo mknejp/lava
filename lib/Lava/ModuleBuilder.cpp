@@ -67,6 +67,7 @@ namespace
     void VisitCXXBoolLiteralExpr(const CXXBoolLiteralExpr* expr);
     void VisitFloatingLiteral(const FloatingLiteral* expr);
     void VisitIntegerLiteral(const IntegerLiteral* expr);
+    void VisitParenExpr(const ParenExpr* expr);
 
   private:
     StmtBuilder& _builder;
@@ -131,14 +132,8 @@ void FunctionVisitor::VisitExpr(const Expr* expr)
 void ExprVisitor::VisitBinaryOperator(const BinaryOperator* expr)
 {
   _builder.emitBinaryOperator(*expr,
-                              [expr, this] (StmtBuilder& builder)
-                              {
-                                Visit(expr->getLHS());
-                              },
-                              [expr, this] (StmtBuilder& builder)
-                              {
-                                Visit(expr->getRHS());
-                              });
+                              [expr, this] (StmtBuilder&) { Visit(expr->getLHS()); },
+                              [expr, this] (StmtBuilder&) { Visit(expr->getRHS()); });
 }
 
 void ExprVisitor::VisitCXXBoolLiteralExpr(const CXXBoolLiteralExpr* expr)
@@ -154,6 +149,11 @@ void ExprVisitor::VisitFloatingLiteral(const FloatingLiteral* expr)
 void ExprVisitor::VisitIntegerLiteral(const IntegerLiteral* expr)
 {
   _builder.emitIntegerLiteral(*expr);
+}
+
+void ExprVisitor::VisitParenExpr(const ParenExpr* expr)
+{
+  _builder.emitParenExpr([expr, this] (StmtBuilder&) { Visit(expr->getSubExpr()); });
 }
 
 ////////////////////////////////////////////////////////////////////////////////

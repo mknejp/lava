@@ -253,14 +253,26 @@ bool glsl::StmtBuilder::emitIntegerLiteral(const IntegerLiteral& literal)
 }
 
 template<class F>
-bool glsl::StmtBuilder::emitUnaryOperator(const UnaryOperator& expr, F director)
+bool glsl::StmtBuilder::emitParenExpr(F subexpr)
+{
+  _w << '(';
+  if(subexpr(*this))
+  {
+    _w << ')';
+    return true;
+  }
+  return false;
+}
+
+template<class F>
+bool glsl::StmtBuilder::emitUnaryOperator(const UnaryOperator& expr, F subexpr)
 {
   if(expr.isPrefix())
   {
     printOperator(expr.getOpcode(), _w);
-    return director(*this);
+    return subexpr(*this);
   }
-  else if(director(*this))
+  else if(subexpr(*this))
   {
     printOperator(expr.getOpcode(), _w);
     return true;
