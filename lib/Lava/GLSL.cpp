@@ -209,16 +209,43 @@ void glsl::RecordBuilder::printFieldImpl(QualType type, llvm::StringRef identifi
 // StmtBuilder
 //
 
-glsl::StmtBuilder::StmtBuilder(TypeNamePrinter& typeNamePrinter)
+glsl::StmtBuilder::StmtBuilder(TypeNamePrinter& typeNamePrinter, IndentWriter& w)
 : _typeNamePrinter(typeNamePrinter)
+, _w(w)
 {
+}
+
+template<class RHS, class LHS>
+bool glsl::StmtBuilder::emitBinaryOperator(const BinaryOperator& expr, RHS lhs, LHS rhs)
+{
+  if(lhs(*this))
+  {
+    printOperator(expr.getOpcode(), _w);
+    return rhs(*this);
+  }
+  return false;
 }
 
 bool glsl::StmtBuilder::emitIntegerLiteral(const IntegerLiteral& literal)
 {
-  literal.getValue().print(_out, false);
-  _out.flush();
+  literal.getValue().print(_w.ostreamWithIndent(), false);
   return true;
+}
+
+template<class F>
+bool glsl::StmtBuilder::emitUnaryOperator(const UnaryOperator& expr, F director)
+{
+  if(expr.isPrefix())
+  {
+    printOperator(expr.getOpcode(), _w);
+    return director(*this);
+  }
+  else if(director(*this))
+  {
+    printOperator(expr.getOpcode(), _w);
+    return true;
+  }
+  return false;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -240,13 +267,10 @@ bool glsl::FunctionBuilder::addParam(const ParmVarDecl& param)
 template<class F>
 bool glsl::FunctionBuilder::buildStmt(F director)
 {
-  StmtBuilder stmt{_typeNamePrinter};
+  StmtBuilder stmt{_typeNamePrinter, _w};
   if(director(stmt))
   {
-    if(!stmt.expr().empty())
-    {
-      _w << stmt.expr() << ';' << _w.endln();
-    }
+    _w << ';' << _w.endln();
     return true;
   }
   return false;
@@ -262,11 +286,12 @@ bool glsl::FunctionBuilder::declareUndefinedVar(const VarDecl& var)
 template<class F>
 bool glsl::FunctionBuilder::declareVar(const VarDecl& var, F director)
 {
-  StmtBuilder stmt{_typeNamePrinter};
+  StmtBuilder stmt{_typeNamePrinter, _w};
+  _typeNamePrinter.printTypeName(var.getType(), _w);
+  _w << ' ' << var.getName() << " = ";
   if(director(stmt))
   {
-    _typeNamePrinter.printTypeName(var.getType(), _w);
-    _w << ' ' << var.getName() << " = " << stmt.expr() << ';' << _w.endln();
+    _w << ';' << _w.endln();
     return true;
   }
   return false;

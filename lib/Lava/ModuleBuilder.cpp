@@ -63,6 +63,7 @@ namespace
   public:
     ExprVisitor(StmtBuilder& stmt) : _builder(stmt) { }
 
+    void VisitBinaryOperator(const BinaryOperator* expr);
     void VisitIntegerLiteral(const IntegerLiteral* expr);
 
   private:
@@ -105,7 +106,9 @@ void FunctionVisitor::VisitVarDecl(const VarDecl* decl)
       });
     }
     else
+    {
       _builder.declareUndefinedVar(*decl);
+    }
   }
   else
     llvm_unreachable("function local statics not implemented");
@@ -122,6 +125,19 @@ void FunctionVisitor::VisitExpr(const Expr* expr)
 ////////////////////////////////////////////////////////////////////////////////
 // ExprVisitor
 //
+
+void ExprVisitor::VisitBinaryOperator(const BinaryOperator* expr)
+{
+  _builder.emitBinaryOperator(*expr,
+                              [expr, this] (StmtBuilder& builder)
+                              {
+                                Visit(expr->getLHS());
+                              },
+                              [expr, this] (StmtBuilder& builder)
+                              {
+                                Visit(expr->getRHS());
+                              });
+}
 
 void ExprVisitor::VisitIntegerLiteral(const IntegerLiteral* expr)
 {

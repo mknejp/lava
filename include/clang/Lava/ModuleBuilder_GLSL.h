@@ -85,21 +85,19 @@ private:
 class clang::lava::glsl::StmtBuilder
 {
 public:
-  StmtBuilder(TypeNamePrinter& typeNamePrinter);
+  StmtBuilder(TypeNamePrinter& typeNamePrinter, IndentWriter& w);
+
+  template<class RHS, class LHS>
+  bool emitBinaryOperator(const BinaryOperator& expr, RHS lhs, LHS rhs);
 
   bool emitIntegerLiteral(const IntegerLiteral& literal);
 
-  llvm::StringRef expr() const { return _expr; }
+  template<class F>
+  bool emitUnaryOperator(const UnaryOperator& expr, F director);
 
 private:
   TypeNamePrinter& _typeNamePrinter;
-  // This field is used to transport the results of subexpressions back to the
-  // caller. We cannot use return values since the control flow is not under
-  // our direct control.
-  // It is overwritten by every subexpression and must be used/saved before
-  // descending into a new subexpression.
-  std::string _expr;
-  llvm::raw_string_ostream _out{_expr};
+  IndentWriter& _w;
 };
 
 class clang::lava::glsl::FunctionBuilder

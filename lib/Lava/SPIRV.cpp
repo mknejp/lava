@@ -11,7 +11,6 @@
 
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/DeclCXX.h"
-#include "clang/Lava/CodePrintingTools.h"
 #include "clang/Lava/ModuleBuilder.h"
 #include "clang/Lava/IndentWriter.h"
 

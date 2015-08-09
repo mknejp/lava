@@ -7,6 +7,8 @@
 //
 //===----------------------------------------------------------------------===//
 //
+// Many of the languages we generate code for share many aspects. This file
+// defines some utilities to cover as much common stuff as possible.
 //
 //===----------------------------------------------------------------------===//
 
@@ -14,6 +16,7 @@
 #define LLVM_CLANG_LAVA_CODEPRINTINGTOOLS_H
 
 #include "clang/AST/Type.h"
+#include "clang/AST/OperationKinds.h"
 #include <memory>
 #include <string>
 
@@ -45,6 +48,10 @@ namespace clang
     void printCxxFunctionProto(FunctionDecl& decl, IndentWriter& w);
     std::string printCxxFunctionName(FunctionDecl& decl);
     std::string printCxxFunctionProto(FunctionDecl& decl);
+
+    void printOperator(BinaryOperatorKind opcode, IndentWriter w);
+    void printOperator(UnaryOperatorKind opcode, IndentWriter w);
+    void printBoolLiteral(bool value, IndentWriter& w);
   }
 }
 

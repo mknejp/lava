@@ -19,9 +19,11 @@
 namespace clang
 {
   class ASTContext;
+  class BinaryOperator;
   class DiagnosticsEngine;
   class IntegerLiteral;
   class ParmVarDecl;
+  class UnaryOperator;
 
   namespace lava
   {
@@ -123,10 +125,25 @@ private:
 
 class clang::lava::StmtBuilder
 {
+  using Director = std::function<void(StmtBuilder&)>;
+
 public:
-  bool emitIntegerLiteral(const IntegerLiteral& literal)
+  template<class LHS, class RHS>
+  bool emitBinaryOperator(const BinaryOperator& expr, LHS lhsDirector, RHS rhsDirector)
   {
-    return _success = _success && emitIntegerLiteralImpl(literal);
+    auto lhs = Director{std::forward<LHS>(lhsDirector)};
+    auto rhs = Director{std::forward<RHS>(rhsDirector)};
+    return _success = _success && emitBinaryOperatorImpl(expr, lhs, rhs);
+  }
+  bool emitIntegerLiteral(const IntegerLiteral& expr)
+  {
+    return _success = _success && emitIntegerLiteralImpl(expr);
+  }
+  template<class F>
+  bool emitUnaryOperator(const UnaryOperator& expr, F&& subexpr)
+  {
+    auto f = Director{std::forward<F>(subexpr)};
+    return _success = _success && emitUnaryOperatorImpl(expr, f);
   }
 
 protected:
@@ -145,7 +162,9 @@ private:
 
   bool success() const { return _success; }
 
-  virtual bool emitIntegerLiteralImpl(const IntegerLiteral& literal) = 0;
+  virtual bool emitBinaryOperatorImpl(const BinaryOperator& expr, Director& lhs, Director& rhs) = 0;
+  virtual bool emitIntegerLiteralImpl(const IntegerLiteral& expr) = 0;
+  virtual bool emitUnaryOperatorImpl(const UnaryOperator& expr, Director& subexpr) = 0;
 
   virtual void vftbl();
 
@@ -159,7 +178,20 @@ public:
   Impl(T& target) : _target(target) { }
 
 private:
-  bool emitIntegerLiteralImpl(const IntegerLiteral& literal) override { return _target.emitIntegerLiteral(literal); }
+  using Invoke = DirectorInvoker<T, StmtBuilder>;
+
+  bool emitBinaryOperatorImpl(const BinaryOperator& expr, Director& lhs, Director& rhs) override
+  {
+    return _target.emitBinaryOperator(expr, Invoke{_target, lhs}, Invoke{_target, rhs});
+  }
+  bool emitIntegerLiteralImpl(const IntegerLiteral& expr) override
+  {
+    return _target.emitIntegerLiteral(expr);
+  }
+  virtual bool emitUnaryOperatorImpl(const UnaryOperator& expr, Director& subexpr) override
+  {
+    return _target.emitUnaryOperator(expr, Invoke{_target, subexpr});
+  }
 
   T& _target;
 };
@@ -170,6 +202,8 @@ private:
 
 class clang::lava::FunctionBuilder
 {
+  using Director = std::function<void(FunctionBuilder&)>;
+  using StmtDirector = std::function<void(StmtBuilder&)>;
 public:
   /// \name Function header setup
   /// @{
@@ -193,7 +227,7 @@ public:
   template<class F>
   bool buildStmt(F&& director)
   {
-    auto f = std::function<void(StmtBuilder&)>{std::forward<F>(director)};
+    auto f = StmtDirector{std::forward<F>(director)};
     return _success = _success && buildStmtImpl(f);
   }
   /// Declare a single new local variable with no definition.
@@ -205,7 +239,7 @@ public:
   template<class F>
   bool declareVar(const VarDecl& var, F&& director)
   {
-    auto f = std::function<void(StmtBuilder&)>{std::forward<F>(director)};
+    auto f = StmtDirector{std::forward<F>(director)};
     return _success = _success && declareVarImpl(var, f);
   }
   /// Open a new local scope.
@@ -213,7 +247,7 @@ public:
   template<class F>
   bool pushScope(F&& director)
   {
-    auto f = std::function<void(FunctionBuilder&)>{std::forward<F>(director)};
+    auto f = Director{std::forward<F>(director)};
     return _success = _success && pushScopeImpl(f);
   }
 
@@ -236,10 +270,10 @@ private:
   bool success() const { return _success; }
 
   virtual bool addParamImpl(const ParmVarDecl& param) = 0;
-  virtual bool buildStmtImpl(std::function<void(StmtBuilder&)>& director) = 0;
+  virtual bool buildStmtImpl(StmtDirector& director) = 0;
   virtual bool declareUndefinedVarImpl(const VarDecl& var) = 0;
-  virtual bool declareVarImpl(const VarDecl& var, std::function<void(StmtBuilder&)>& director) = 0;
-  virtual bool pushScopeImpl(std::function<void(FunctionBuilder&)>& director) = 0;
+  virtual bool declareVarImpl(const VarDecl& var, StmtDirector& director) = 0;
+  virtual bool pushScopeImpl(Director& director) = 0;
   virtual bool setReturnTypeImpl(QualType type) = 0;
 
   virtual void vftbl();
@@ -258,7 +292,7 @@ private:
   {
     return _target.addParam(param);
   }
-  bool buildStmtImpl(std::function<void(StmtBuilder&)>& director) override
+  bool buildStmtImpl(StmtDirector& director) override
   {
     return _target.buildStmt(DirectorInvoker<T, StmtBuilder>{_target, director});
   }
@@ -266,11 +300,11 @@ private:
   {
     return _target.declareUndefinedVar(var);
   }
-  bool declareVarImpl(const VarDecl& var, std::function<void(StmtBuilder&)>& director) override
+  bool declareVarImpl(const VarDecl& var, StmtDirector& director) override
   {
     return _target.declareVar(var, DirectorInvoker<T, StmtBuilder>{_target, director});
   }
-  bool pushScopeImpl(std::function<void(FunctionBuilder&)>& director) override
+  bool pushScopeImpl(Director& director) override
   {
     return _target.pushScope([this, &director] { director(*this); return success(); });
   }
@@ -288,6 +322,9 @@ private:
 
 class clang::lava::ModuleBuilder
 {
+  using RecordDirector = std::function<void(RecordBuilder&)>;
+  using FunctionDirector = std::function<void(FunctionBuilder&)>;
+
 public:
   template<class T, class... Args>
   static ModuleBuilder create(Args&&... args)
@@ -298,13 +335,13 @@ public:
   template<class F>
   auto buildRecord(QualType type, F&& director) -> bool
   {
-    auto f = std::function<void(RecordBuilder&)>{std::forward<F>(director)};
+    auto f = RecordDirector{std::forward<F>(director)};
     return _target->buildRecord(type, f);
   }
   template<class F>
   auto buildFunction(FunctionDecl& decl, F&& director) -> bool
   {
-    auto f = std::function<void(FunctionBuilder&)>{std::forward<F>(director)};
+    auto f = FunctionDirector{std::forward<F>(director)};
     return _target->buildFunction(decl, f);
   }
   // Can be text or binary and is the full module content to be written to a file
@@ -316,8 +353,8 @@ private:
   public:
     virtual ~Concept();
 
-    virtual auto buildRecord(QualType type, std::function<void(RecordBuilder&)>& director) -> bool = 0;
-    virtual auto buildFunction(FunctionDecl& decl, std::function<void(FunctionBuilder&)>& director) -> bool = 0;
+    virtual auto buildRecord(QualType type, RecordDirector& director) -> bool = 0;
+    virtual auto buildFunction(FunctionDecl& decl, FunctionDirector& director) -> bool = 0;
     virtual auto moduleContent() -> std::string = 0;
   };
 
@@ -336,12 +373,12 @@ public:
   template<class... Args>
   Model(Args&&... args) : _target(std::forward<Args>(args)...) { }
 
-  auto buildRecord(QualType type, std::function<void(RecordBuilder&)>& director) -> bool override
+  auto buildRecord(QualType type, RecordDirector& director) -> bool override
   {
     return _target.buildRecord(type, DirectorInvoker<T, RecordBuilder>{_target, director});
   }
 
-  auto buildFunction(FunctionDecl& decl, std::function<void(FunctionBuilder&)>& director) -> bool override
+  auto buildFunction(FunctionDecl& decl, FunctionDirector& director) -> bool override
   {
     return _target.buildFunction(decl, DirectorInvoker<T, FunctionBuilder>{_target, director});
   }

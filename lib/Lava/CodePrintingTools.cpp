@@ -104,3 +104,64 @@ std::string clang::lava::printCxxFunctionProto(FunctionDecl& decl)
     printCxxFunctionProto(decl, w);
   });
 }
+
+void clang::lava::printOperator(BinaryOperatorKind opcode, IndentWriter w)
+{
+  switch(opcode)
+  {
+    case BO_PtrMemD:
+    case BO_PtrMemI:
+      llvm_unreachable("pointer-to-member not supported");
+    case BO_Mul:       w << " * "; break;
+    case BO_Div:       w << " / "; break;
+    case BO_Rem:       w << " % "; break;
+    case BO_Add:       w << " + "; break;
+    case BO_Sub:       w << " - "; break;
+    case BO_Shl:       w << " << "; break;
+    case BO_Shr:       w << " >> "; break;
+    case BO_LT:        w << " < "; break;
+    case BO_GT:        w << " > "; break;
+    case BO_LE:        w << " <= "; break;
+    case BO_GE:        w << " >= "; break;
+    case BO_EQ:        w << " == "; break;
+    case BO_NE:        w << " != "; break;
+    case BO_And:       w << " & "; break;
+    case BO_Xor:       w << " ^ "; break;
+    case BO_Or:        w << " | "; break;
+    case BO_LAnd:      w << " && "; break;
+    case BO_LOr:       w << " || "; break;
+    case BO_Assign:    w << " = "; break;
+    case BO_MulAssign: w << " *= "; break;
+    case BO_DivAssign: w << " /= "; break;
+    case BO_RemAssign: w << " %= "; break;
+    case BO_AddAssign: w << " += "; break;
+    case BO_SubAssign: w << " -= "; break;
+    case BO_ShlAssign: w << " <<= "; break;
+    case BO_ShrAssign: w << " >>= "; break;
+    case BO_AndAssign: w << " &= "; break;
+    case BO_XorAssign: w << " ^= "; break;
+    case BO_OrAssign:  w << " |= "; break;
+    case BO_Comma:     w << ", "; break;
+  }
+}
+
+void clang::lava::printOperator(UnaryOperatorKind opcode, IndentWriter w)
+{
+  switch(opcode)
+  {
+    case UO_PostInc: w << "++"; break;
+    case UO_PostDec: w << "--"; break;
+    case UO_PreInc:  w << "++"; break;
+    case UO_PreDec:  w << "--"; break;
+    case UO_Plus:    w << "+"; break;
+    case UO_Minus:   w << "-"; break;
+    case UO_Not:     w << "~"; break;
+    case UO_LNot:    w << "!"; break;
+    case UO_AddrOf:
+    case UO_Deref:
+    case UO_Real:
+    case UO_Imag:
+    case UO_Extension:
+      llvm_unreachable("operator not supported");
+  }
+}
