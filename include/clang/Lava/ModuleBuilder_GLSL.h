@@ -87,7 +87,7 @@ public:
   FunctionBuilder(FunctionDecl& decl, TypeNamePrinter& typeNamePrinter);
 
   bool setReturnType(QualType type);
-  bool addParam(QualType type, llvm::StringRef identifier);
+  bool addParam(ParmVarDecl* param);
   template<class F>
   bool pushScope(F director);
 
@@ -107,7 +107,7 @@ private:
 
   FunctionDecl& _decl;
   QualType _returnType;
-  std::vector<std::pair<QualType, std::string>> _formalParams;
+  std::vector<ParmVarDecl*> _formalParams;
 };
 
 class clang::lava::glsl::ModuleBuilder

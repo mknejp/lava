@@ -91,9 +91,9 @@ namespace
     // We feed the arguments individually in case we have to transform them
     for(auto* param : decl.params())
     {
-      builder.addParam(param->getType(), param->getName());
+      builder.addParam(param);
     }
-    builder.pushScope([&] () { });
+    builder.pushScope([&] (FunctionBuilder& builder) { });
     return true;
   }
 

@@ -11,7 +11,9 @@
 
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/DeclCXX.h"
+#include "clang/Lava/CodePrintingTools.h"
 #include "clang/Lava/ModuleBuilder.h"
+#include "clang/Lava/IndentWriter.h"
 
 using namespace clang;
 using namespace lava;
@@ -76,6 +78,11 @@ spv::Id spirv::TypeCache::get(QualType type) const
   llvm_unreachable("type not supported/implemented for SPIR-V");
 }
 
+spv::Id spirv::TypeCache::getPointer(QualType type, spv::StorageClass storage) const
+{
+  return _builder.makePointer(storage, get(type));
+}
+
 void spirv::TypeCache::add(CXXRecordDecl* decl, spv::Id id)
 {
   assert(_builtRecords.find(decl) == _builtRecords.end()
@@ -138,32 +145,74 @@ spv::Id spirv::RecordBuilder::finalize()
 // FunctionBuilder
 //
 
-spirv::FunctionBuilder::FunctionBuilder(FunctionDecl& decl, TypeCache& types)
+spirv::FunctionBuilder::FunctionBuilder(FunctionDecl& decl, TypeCache& types, TypeMangler& mangler)
 : _types(types)
+, _mangler(mangler)
 , _decl(decl)
 {
 }
 
 bool spirv::FunctionBuilder::setReturnType(QualType type)
 {
+  assert(_returnType == 0 && "return type already set");
+  _returnType = _types[type];
   return true;
 }
 
-bool spirv::FunctionBuilder::addParam(QualType type, llvm::StringRef identifier)
+bool spirv::FunctionBuilder::addParam(ParmVarDecl* param)
 {
+  _params.push_back(param);
   return true;
 }
 
 template<class F>
 bool spirv::FunctionBuilder::pushScope(F director)
 {
-  director();
-  return true;
+  if(!_function)
+  {
+    // This is the first block in the function.
+    // This means we know the entire signature and can create the type.
+    assert(_returnType != 0 && "return type not yet set");
+
+    auto params = std::vector<spv::Id>{};
+    std::transform(_params.begin(), _params.end(),
+                   std::back_inserter(params),
+                   [this] (const ParmVarDecl* param)
+    {
+      auto type = param->getType();
+      // Arguments passed by reference are passed as pointer so the original can be modified.
+      // This includes const references as even a const member can change "mutable" fields.
+      // TODO: If the pointee type has no "mutable" members we could think about dropping the indirection.
+      // TODO: It would probably also require banning of const_cast, though...
+      // TODO: But if imported functions are a thing they could perform a write anyway...
+      if(auto* ref = type->getAs<ReferenceType>())
+      {
+        return _types.getPointer(ref->getPointeeType(), spv::StorageClassFunction);
+      }
+      else
+      {
+        return _types[type];
+      }
+    });
+
+    std::string name = _mangler.mangleCxxDeclName(_decl);
+    spv::Block* block;
+    _function = _builder.makeFunctionEntry(_returnType, name.c_str(), params, &block);
+    for(auto i = 0u; i < params.size(); ++i)
+    {
+      _builder.addName(_function->getParamId(i), _params[i]->getNameAsString().c_str());
+    }
+  }
+  // We don't need any extra setup for a new scope, just continue the existing block.
+  // It's an aspect of the frontend we don't have to care about.
+  return director();
 }
 
 spv::Id spirv::FunctionBuilder::finalize()
 {
-  return 0;
+  assert(_function && "there is no function");
+  _builder.leaveFunction(false);
+  return _function->getId();
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -172,6 +221,7 @@ spv::Id spirv::FunctionBuilder::finalize()
 
 spirv::ModuleBuilder::ModuleBuilder(ASTContext& ast)
 : _ast(ast)
+, _mangler(ast)
 {
   _builder.setSource(spv::SourceLanguage::SourceLanguageUnknown, 0);
 }
@@ -202,7 +252,7 @@ bool spirv::ModuleBuilder::buildRecord(QualType type, Director director)
 template<class Director>
 bool spirv::ModuleBuilder::buildFunction(FunctionDecl& decl, Director director)
 {
-  FunctionBuilder builder{decl, _types};
+  FunctionBuilder builder{decl, _types, _mangler};
   auto success = director(builder);
   if(success)
   {

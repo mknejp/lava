@@ -15,6 +15,7 @@
 
 #include "clang/AST/DeclCXX.h"
 #include "clang/AST/Type.h"
+#include "clang/Lava/CodePrintingTools.h"
 #include "clang/Lava/SPIRV.h"
 #include "SPIRV/SpvBuilder.h"
 
@@ -41,6 +42,7 @@ public:
 
   void add(CXXRecordDecl* decl, spv::Id id);
   spv::Id get(QualType type) const;
+  spv::Id getPointer(QualType type, spv::StorageClass storage) const;
   spv::Id operator[](QualType type) const { return get(type); }
 
   spv::Builder& builder() const { return _builder; }
@@ -73,10 +75,10 @@ private:
 class clang::lava::spirv::FunctionBuilder
 {
 public:
-  FunctionBuilder(FunctionDecl& decl, TypeCache& types);
+  FunctionBuilder(FunctionDecl& decl, TypeCache& types, TypeMangler& mangler);
 
   bool setReturnType(QualType type);
-  bool addParam(QualType type, llvm::StringRef identifier);
+  bool addParam(ParmVarDecl* param);
   template<class F>
   bool pushScope(F director);
 
@@ -84,10 +86,13 @@ public:
 
 private:
   TypeCache& _types;
+  spv::Builder& _builder{_types.builder()};
+  TypeMangler& _mangler;
   
   FunctionDecl& _decl;
-  QualType _returnType;
-  std::vector<std::pair<QualType, std::string>> _formalParams;
+  spv::Id _returnType = 0;
+  spv::Function* _function = nullptr;
+  std::vector<ParmVarDecl*> _params;
 };
 
 class clang::lava::spirv::ModuleBuilder
@@ -106,6 +111,7 @@ private:
   ASTContext& _ast;
   spv::Builder _builder{0};
   TypeCache _types{_builder};
+  TypeMangler _mangler;
 };
 
 #endif // LLVM_CLANG_LAVA_MODULEBUILDER_SPIRV_H

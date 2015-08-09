@@ -20,6 +20,7 @@ namespace clang
 {
   class ASTContext;
   class DiagnosticsEngine;
+  class ParmVarDecl;
 
   namespace lava
   {
@@ -39,15 +40,15 @@ namespace clang
 class clang::lava::RecordBuilder
 {
 public:
-  auto addBase(QualType type, unsigned index) -> bool
+  bool addBase(QualType type, unsigned index)
   {
     return _success && addBaseImpl(type, index);
   }
-  auto addField(QualType type, llvm::StringRef identifier) -> bool
+  bool addField(QualType type, llvm::StringRef identifier)
   {
     return _success && addFieldImpl(type, identifier);
   }
-  auto addCapture(QualType type, llvm::StringRef identifier) -> bool
+  bool addCapture(QualType type, llvm::StringRef identifier)
   {
     return _success && addCaptureImpl(type, identifier);
   }
@@ -67,9 +68,9 @@ private:
 
   bool success() const { return _success; }
 
-  virtual auto addBaseImpl(QualType type, unsigned index) -> bool = 0;
-  virtual auto addFieldImpl(QualType type, llvm::StringRef identifier) -> bool = 0;
-  virtual auto addCaptureImpl(QualType type, llvm::StringRef identifier) -> bool = 0;
+  virtual bool addBaseImpl(QualType type, unsigned index) = 0;
+  virtual bool addFieldImpl(QualType type, llvm::StringRef identifier) = 0;
+  virtual bool addCaptureImpl(QualType type, llvm::StringRef identifier) = 0;
 
   virtual void vftbl();
 
@@ -83,9 +84,9 @@ public:
   Impl(T& target) : _target(target) { }
 
 private:
-  auto addBaseImpl(QualType type, unsigned index) -> bool final { return _target.addBase(type, index); }
-  auto addFieldImpl(QualType type, llvm::StringRef identifier) -> bool final { return _target.addField(type, identifier); }
-  auto addCaptureImpl(QualType type, llvm::StringRef identifier) -> bool final { return _target.addCapture(type, identifier); }
+  bool addBaseImpl(QualType type, unsigned index) override { return _target.addBase(type, index); }
+  bool addFieldImpl(QualType type, llvm::StringRef identifier) override { return _target.addField(type, identifier); }
+  bool addCaptureImpl(QualType type, llvm::StringRef identifier) override { return _target.addCapture(type, identifier); }
 
   T& _target;
 };
@@ -101,9 +102,9 @@ public:
   {
     return _success = _success && setReturnTypeImpl(type);
   }
-  bool addParam(QualType type, llvm::StringRef identifier)
+  bool addParam(ParmVarDecl* param)
   {
-    return _success = _success && addParamImpl(type, identifier);
+    return _success = _success && addParamImpl(param);
   }
   template<class F>
   bool pushScope(F director, decltype(std::declval<F>()(std::declval<FunctionBuilder&>()))* = nullptr)
@@ -111,16 +112,6 @@ public:
     if(_success)
     {
       auto f = std::function<void(FunctionBuilder&)>{std::forward<F>(director)};
-      _success = _success && pushScopeImpl(f);
-    }
-    return _success;
-  }
-  template<class F>
-  bool pushScope(F director, decltype(std::declval<F>()())* = nullptr)
-  {
-    if(_success)
-    {
-      auto f = std::function<void()>{std::forward<F>(director)};
       _success = _success && pushScopeImpl(f);
     }
     return _success;
@@ -142,9 +133,8 @@ private:
   bool success() const { return _success; }
 
   virtual bool setReturnTypeImpl(QualType type) = 0;
-  virtual bool addParamImpl(QualType type, llvm::StringRef identifier) = 0;
+  virtual bool addParamImpl(ParmVarDecl* param) = 0;
   virtual bool pushScopeImpl(std::function<void(FunctionBuilder&)>& director) = 0;
-  virtual bool pushScopeImpl(std::function<void()>& director) = 0;
 
   virtual void vftbl();
 
@@ -159,20 +149,12 @@ public:
 
 private:
   bool setReturnTypeImpl(QualType type) override { return _target.setReturnType(type); }
-  bool addParamImpl(QualType type, llvm::StringRef identifier) override  { return _target.addParam(type, identifier); }
+  bool addParamImpl(ParmVarDecl* param) override  { return _target.addParam(param); }
   bool pushScopeImpl(std::function<void(FunctionBuilder&)>& director) override
   {
     return _target.pushScope([this, &director]
     {
       director(*this);
-      return success();
-    });
-  }
-  bool pushScopeImpl(std::function<void()>& director) override
-  {
-    return _target.pushScope([this, &director]
-    {
-      director();
       return success();
     });
   }
@@ -228,7 +210,7 @@ private:
 };
 
 template<class T>
-class clang::lava::ModuleBuilder::Model : public Concept
+class clang::lava::ModuleBuilder::Model final : public Concept
 {
 public:
   template<class... Args>

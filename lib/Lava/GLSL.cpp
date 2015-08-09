@@ -10,6 +10,7 @@
 #include "clang/Lava/ModuleBuilder_GLSL.h"
 
 #include "clang/AST/DeclCXX.h"
+#include "clang/Lava/CodePrintingTools.h"
 #include "clang/Lava/ModuleBuilder.h"
 
 using namespace clang;
@@ -215,13 +216,14 @@ glsl::FunctionBuilder::FunctionBuilder(FunctionDecl& decl, TypeNamePrinter& type
 
 bool glsl::FunctionBuilder::setReturnType(QualType type)
 {
+  assert(_returnType.isNull() && "return type already set");
   _returnType = type;
   return true;
 }
 
-bool glsl::FunctionBuilder::addParam(QualType type, llvm::StringRef identifier)
+bool glsl::FunctionBuilder::addParam(ParmVarDecl* param)
 {
-  _formalParams.push_back({type, identifier.str()});
+  _formalParams.push_back(param);
   return true;
 }
 
@@ -260,32 +262,33 @@ void glsl::FunctionBuilder::buildProtoStrings()
     IndentWriter w{out};
 
     w << "// ";
-    _returnType.print(w.ostream(), _decl.getASTContext().getPrintingPolicy());
-    w << ' ';
-    _typeNamePrinter.printCxxFunctionName(_decl, w);
-    w << '(';
-    bool first = true;
-    for(const auto& param : _decl.params())
-    {
-      if(!first)
-        w << ", ";
-      first = false;
-      param->print(w.ostream());
-    }
-    w << ')' << w.endln();
+    printCxxFunctionProto(_decl, w);
+    w << w.endln();
 
     _typeNamePrinter.printTypeName(_returnType, w);
     w << ' ';
     _typeNamePrinter.printFunctionName(_decl, w);
     w << '(';
-    first = true;
+    auto first = true;
     for(const auto& param : _formalParams)
     {
+      auto type = param->getType();
+
       if(!first)
         w << ", ";
       first = false;
-      _typeNamePrinter.printTypeName(param.first, w);
-      w << ' ' << param.second;
+      if(auto* ref = type->getAs<ReferenceType>())
+      {
+        type = ref->getPointeeType();
+        if(!type.isConstQualified())
+          w << "inout ";
+      }
+      if(type.isConstQualified())
+      {
+        w << "const ";
+      }
+      _typeNamePrinter.printTypeName(type, w);
+      w << ' ' << param->getName();
     }
     w << ')';
   }
