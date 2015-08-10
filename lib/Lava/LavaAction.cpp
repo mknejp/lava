@@ -331,15 +331,15 @@ private:
       buildModule(_ctx, module, ShaderStage::vertex);
       llvm::errs() << module.moduleContent();
     }
-//    llvm::errs() << "====================\n";
-//    {
-//      // SPIR-V
-//      spv::Parameterize();
-//      GLSL_STD_450::GetDebugNames(GlslStd450DebugNames);
-//      auto module = spirv::createModuleBuilder(_ci.getASTContext());
-//      buildModule(_ctx, module, ShaderStage::vertex);
-//      printSpirv(module.moduleContent());
-//    }
+    llvm::errs() << "====================\n";
+    {
+      // SPIR-V
+      spv::Parameterize();
+      GLSL_STD_450::GetDebugNames(GlslStd450DebugNames);
+      auto module = spirv::createModuleBuilder(_ci.getASTContext());
+      buildModule(_ctx, module, ShaderStage::vertex);
+      printSpirv(module.moduleContent());
+    }
 
     printEntry("vert", _ctx.vertexFunction);
     printEntry("frag", _ctx.fragmentFunction);
