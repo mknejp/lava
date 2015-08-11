@@ -20,6 +20,7 @@ namespace clang
 {
   class ASTContext;
   class BinaryOperator;
+  class CastExpr;
   class CXXBoolLiteralExpr;
   class DiagnosticsEngine;
   class FloatingLiteral;
@@ -131,15 +132,21 @@ class clang::lava::StmtBuilder
 
 public:
   template<class LHS, class RHS>
-  bool emitBinaryOperator(const BinaryOperator& expr, LHS lhsDirector, RHS rhsDirector)
+  bool emitBinaryOperator(const BinaryOperator& expr, LHS lhs, RHS rhs)
   {
-    auto lhs = Director{std::forward<LHS>(lhsDirector)};
-    auto rhs = Director{std::forward<RHS>(rhsDirector)};
-    return _success = _success && emitBinaryOperatorImpl(expr, lhs, rhs);
+    auto f1 = Director{std::forward<LHS>(lhs)};
+    auto f2 = Director{std::forward<RHS>(rhs)};
+    return _success = _success && emitBinaryOperatorImpl(expr, f1, f2);
   }
   bool emitBooleanLiteral(const CXXBoolLiteralExpr& expr)
   {
     return _success = _success && emitBooleanLiteralImpl(expr);
+  }
+  template<class F>
+  bool emitCast(const CastExpr& expr, F&& subexpr)
+  {
+    auto f = Director{std::forward<F>(subexpr)};
+    return _success = _success && emitCastImpl(expr, f);
   }
   bool emitFloatingLiteral(const FloatingLiteral& expr)
   {
@@ -161,6 +168,10 @@ public:
     auto f = Director{std::forward<F>(subexpr)};
     return _success = _success && emitUnaryOperatorImpl(expr, f);
   }
+  bool emitVariableAccess(const VarDecl& var)
+  {
+    return _success = _success && emitVariableAccessImpl(var);
+  }
 
 protected:
   StmtBuilder() = default;
@@ -180,10 +191,12 @@ private:
 
   virtual bool emitBinaryOperatorImpl(const BinaryOperator& expr, Director& lhs, Director& rhs) = 0;
   virtual bool emitBooleanLiteralImpl(const CXXBoolLiteralExpr& expr) = 0;
+  virtual bool emitCastImpl(const CastExpr& expr, Director& subexpr) = 0;
   virtual bool emitFloatingLiteralImpl(const FloatingLiteral& expr) = 0;
   virtual bool emitIntegerLiteralImpl(const IntegerLiteral& expr) = 0;
   virtual bool emitParenExprImpl(Director& subexpr) = 0;
   virtual bool emitUnaryOperatorImpl(const UnaryOperator& expr, Director& subexpr) = 0;
+  virtual bool emitVariableAccessImpl(const VarDecl& var) = 0;
 
   virtual void vftbl();
 
@@ -207,6 +220,10 @@ private:
   {
     return _target.emitBooleanLiteral(expr);
   }
+  bool emitCastImpl(const CastExpr& expr, Director& subexpr) override
+  {
+    return _target.emitCast(expr, Invoke{_target, subexpr});
+  }
   bool emitFloatingLiteralImpl(const FloatingLiteral& expr) override
   {
     return _target.emitFloatingLiteral(expr);
@@ -222,6 +239,10 @@ private:
   virtual bool emitUnaryOperatorImpl(const UnaryOperator& expr, Director& subexpr) override
   {
     return _target.emitUnaryOperator(expr, Invoke{_target, subexpr});
+  }
+  bool emitVariableAccessImpl(const VarDecl& var) override
+  {
+    return _target.emitVariableAccess(var);
   }
 
   T& _target;

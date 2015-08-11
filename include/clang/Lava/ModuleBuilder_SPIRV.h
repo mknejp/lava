@@ -100,9 +100,6 @@ struct clang::lava::spirv::Variable
   // True if there is a chance the value has changed since the most recent load.
   // This is used to figure out whether we need to store a variable before calling a function (in case the callee reads its value) or exiting the current function.
   bool isDirty : 1;
-  // True if the variable is initialized.
-  // Trying to load it with inited == false produces an undefined value.
-  bool inited : 1;
 };
 
 // Used to classify the return type of a SPIR-V expression and whether it is tied to a variable or access chain etc.
@@ -128,23 +125,36 @@ struct clang::lava::spirv::ExprResult
 class clang::lava::spirv::Variables
 {
 public:
-  Variables(TypeCache& types);
-  Variables(const Variables&) = delete;
-  Variables& operator=(const Variables&) = delete;
+  Variables(TypeCache& types, Variables* parent, spv::Block* block = nullptr);
 
   spv::Id load(const VarDecl& decl);
   spv::Id load(const ExprResult& expr);
   ExprResult store(const ExprResult& target, spv::Id value);
+  void setBlock(spv::Block* block);
   void trackUndefVariable(const VarDecl& decl);
   // Set id = 0 to indicate a local uninitialized variable
   void trackVariable(const VarDecl& decl, spv::Id id);
+  // Merge the values of all variables across multiple blocks by inserting
+  // OpPhi and other misc instructions. Must be called for the dominating block.
+  void merge(llvm::ArrayRef<Variables> dominatedBlocks);
+  // The given variable is currently being initialized.
+  // If the variable is read we track it and assign it an OpUndef value.
+  // It is the *only* variable which may be read if not being tracked.
+  void markAsInitializing(const VarDecl& decl);
 
 private:
   Variable& find(const VarDecl* decl);
+  Variable* tryFind(const VarDecl* decl);
+  Variable* tryFindInParent(const VarDecl* decl);
+  void sort();
+  spv::Id initUndefined(const VarDecl* decl);
 
   TypeCache& _types;
   spv::Builder& _builder;
   std::vector<Variable> _vars;
+  Variables* _parent;
+  spv::Block* _block = nullptr;
+  const VarDecl* _initing = nullptr;
 };
 
 class clang::lava::spirv::StmtBuilder
@@ -155,12 +165,15 @@ public:
   template<class RHS, class LHS>
   bool emitBinaryOperator(const BinaryOperator& expr, RHS lhs, LHS rhs);
   bool emitBooleanLiteral(const CXXBoolLiteralExpr& expr);
+  template<class F>
+  bool emitCast(const CastExpr& expr, F subexpr);
   bool emitFloatingLiteral(const FloatingLiteral& expr);
   bool emitIntegerLiteral(const IntegerLiteral& expr);
   template<class F>
   bool emitParenExpr(F subexpr);
   template<class F>
   bool emitUnaryOperator(const UnaryOperator& expr, F subexpr);
+  bool emitVariableAccess(const VarDecl& var);
 
   const ExprResult& expr() { return _subexpr; }
 
@@ -225,7 +238,7 @@ private:
   spv::Id _returnType = spv::NoType;
   spv::Function* _function = nullptr;
   std::vector<const ParmVarDecl*> _params;
-  Variables _vars{_types};
+  Variables _vars{_types, nullptr};
 };
 
 class clang::lava::spirv::ModuleBuilder

@@ -231,26 +231,38 @@ spv::Id spirv::RecordBuilder::finalize()
 // Variables
 //
 
-spirv::Variables::Variables(TypeCache& types)
+spirv::Variables::Variables(TypeCache& types, Variables* parent, spv::Block* block)
 : _types(types)
 , _builder(types.builder())
+, _parent(parent)
+, _block(block)
 {
+}
+
+void spirv::Variables::setBlock(spv::Block* block)
+{
+  assert(!_block && "block can be set only once");
+  _block = block;
+}
+
+void spirv::Variables::markAsInitializing(const VarDecl& decl)
+{
+  assert(!_initing && "cannot initialize two variables at once");
+  _initing = &decl;
 }
 
 spv::Id spirv::Variables::load(const VarDecl& decl)
 {
-  auto& var = find(&decl);
-  if(!var.inited)
+  if(_initing == &decl)
   {
-    // Only local non-pointer variables can be uninitialized
-    auto init = llvm::make_unique<spv::Instruction>(_builder.getUniqueId(), _types[decl.getType()], spv::OpUndef);
-    _builder.getBuildPoint()->addInstruction(init.get());
-    // This is now the official value to avoid more OpUndef instructions in the future
-    var.value = init->getResultId();
-    var.inited = false;
-    init.release();
+    // A local variable is accessed in its own initializer.
+    // Produce an undefined value and save it for later.
+    return initUndefined(&decl);
   }
-  else if(var.value == spv::NoResult)
+
+  auto& var = find(&decl);
+
+  if(var.value == spv::NoResult)
   {
     auto id = _builder.createLoad(var.pointer);
     var.isDirty = false;
@@ -280,11 +292,21 @@ spirv::ExprResult spirv::Variables::store(const ExprResult& target, spv::Id valu
   // TODO: composite access chains
   if(target.variable)
   {
+    if(_initing == target.variable)
+    {
+      // A local variable is being initialized with its first value.
+      _initing = nullptr;
+      trackVariable(*target.variable, value);
+      return {value, target.variable, {}};
+    }
+    
+    if(target.variable == _initing)
+      _initing = nullptr;
+
     if(target.value == value)
       return target; // This is a no-op
 
     auto& var = find(target.variable);
-    var.inited = true;
     if(var.isVolatile)
     {
       _builder.createStore(value, var.pointer);
@@ -309,43 +331,76 @@ void spirv::Variables::trackVariable(const VarDecl& decl, spv::Id id)
 {
   auto* ref = decl.getType()->getAs<ReferenceType>();
   auto isReference = ref != nullptr;
+  auto storage = spv::StorageClassFunction; // TODO: derive storage class from variable attributes
   _vars.push_back({
     &decl,
     isReference ? id : spv::NoResult,
     isReference ? spv::NoResult : id,
-    spv::StorageClassFunction,
+    storage,
     isReference && ref->getPointeeType().isVolatileQualified(),
     false,
-    id == spv::NoResult,
   });
+  sort();
+}
+
+spv::Id spirv::Variables::initUndefined(const VarDecl* decl)
+{
+  _initing = nullptr;
+  auto id = _builder.createUndefined(_types[decl->getType()]);
+  trackVariable(*decl, id);
+  return id;
+}
+
+void spirv::Variables::merge(llvm::ArrayRef<Variables> dominatedBlocks)
+{
+  assert(_block && "must have a valid block before merging");
 }
 
 spirv::Variable& spirv::Variables::find(const VarDecl* decl)
 {
-  auto it = std::find_if(_vars.begin(), _vars.end(), [decl] (const Variable& v)
-                         {
-                           return v.var == decl;
-                         });
-//  assert(it != _vars.end() && "variable not tracked");
-  if(it == _vars.end())
+  auto* var = tryFind(decl);
+  if(var)
+    return *var;
+
+  var = tryFindInParent(decl);
+  if(var)
   {
-    // Figure out what kind of variable this is and start tracking it
-    if(decl->isLocalVarDecl())
-    {
-      if(!decl->isStaticLocal())
-      {
-        // If a local variable is not tracked yet it means it is not initialized.
-        // If loaded it produces an OpUndef value.
-        trackVariable(*decl, spv::NoResult);
-        return _vars.back();
-      }
-      else
-        llvm_unreachable("static local variables not yet implemented");
-    }
-    else
-      llvm_unreachable("global variables not yet implemented");
+    _vars.push_back(*var);
+    sort();
+    return *tryFind(decl);
   }
-  return *it;
+  else
+  {
+    assert(!decl->hasLocalStorage() && "local var must be tracked before used");
+    llvm_unreachable("global/static variables not yet implemented");
+  }
+}
+
+spirv::Variable* spirv::Variables::tryFind(const VarDecl* decl)
+{
+  struct Comp
+  {
+    bool operator()(const VarDecl* decl, const Variable& var) { return var.var < decl; }
+    bool operator()(const Variable& var, const VarDecl* decl) { return var.var < decl; }
+  };
+  auto it = std::lower_bound(_vars.begin(), _vars.end(), decl, Comp{});
+  return it == _vars.end() ? nullptr : &*it;
+}
+
+spirv::Variable* spirv::Variables::tryFindInParent(const VarDecl* decl)
+{
+  if(!_parent)
+    return nullptr;
+
+  if(auto* var = _parent->tryFind(decl))
+    return var;
+  else
+    return _parent->tryFindInParent(decl);
+}
+
+void spirv::Variables::sort()
+{
+  std::sort(_vars.begin(), _vars.end(), [] (const Variable& a, const Variable& b) { return a.var < b.var; });
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -438,6 +493,19 @@ bool spirv::StmtBuilder::emitFloatingLiteral(const FloatingLiteral& expr)
   return true;
 }
 
+template<class F>
+bool spirv::StmtBuilder::emitCast(const CastExpr& expr, F subexpr)
+{
+  switch(expr.getCastKind())
+  {
+    case clang::CK_LValueToRValue:
+      return subexpr(*this); // Nothing to do here
+
+    default:
+      llvm_unreachable("cast not implemented");
+  }
+}
+
 bool spirv::StmtBuilder::emitIntegerLiteral(const IntegerLiteral& expr)
 {
   // Literals are never negative
@@ -512,6 +580,13 @@ bool spirv::StmtBuilder::emitUnaryOperator(const UnaryOperator& expr, F subexpr)
         llvm_unreachable("operator not supported");
     }
   }
+  return true;
+}
+
+bool spirv::StmtBuilder::emitVariableAccess(const VarDecl& var)
+{
+  // TODO: combine with access chain
+  _subexpr = {spv::NoResult, &var, _subexpr.chain};
   return true;
 }
 
@@ -650,8 +725,9 @@ bool spirv::FunctionBuilder::buildStmt(F exprDirector)
 bool spirv::FunctionBuilder::declareUndefinedVar(const VarDecl& var)
 {
   StmtBuilder stmt{_types, _vars};
-  // Nothing to do here.
-  // If the variable is loaded before being written to it produces an OpUndef value.
+  // Store the variable with an undefined value. We need this to have an operand
+  // for OpPhi for all blocks we dominate.
+  _vars.trackVariable(var, _builder.createUndefined(_types[var.getType()]));
   return true;
 }
 
@@ -661,6 +737,7 @@ bool spirv::FunctionBuilder::declareVar(const VarDecl& var, F initDirector)
   StmtBuilder stmt{_types, _vars};
   // If the variable is loaded before being written to it produces an OpUndef value.
   // TODO: references
+  _vars.markAsInitializing(var);
   if(initDirector(stmt))
   {
     store({spv::NoResult, &var, {}}, load(stmt.expr()));
@@ -702,6 +779,7 @@ bool spirv::FunctionBuilder::pushScope(F scopeDirector)
     std::string name = _mangler.mangleCxxDeclName(_decl);
     spv::Block* block;
     _function = _builder.makeFunctionEntry(_returnType, name.c_str(), params, &block);
+    _vars.setBlock(block);
     for(auto i = 0u; i < params.size(); ++i)
     {
       _builder.addName(_function->getParamId(i), _params[i]->getNameAsString().c_str());

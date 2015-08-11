@@ -66,10 +66,13 @@ namespace
     ExprVisitor(StmtBuilder& stmt) : _builder(stmt) { }
 
     void VisitBinaryOperator(const BinaryOperator* expr);
+    void VisitCastExpr(const CastExpr* expr);
     void VisitCXXBoolLiteralExpr(const CXXBoolLiteralExpr* expr);
+    void VisitDeclRefExpr(const DeclRefExpr* expr);
     void VisitFloatingLiteral(const FloatingLiteral* expr);
     void VisitIntegerLiteral(const IntegerLiteral* expr);
     void VisitParenExpr(const ParenExpr* expr);
+    void VisitUnaryOperator(const UnaryOperator* expr);
 
   private:
     StmtBuilder& _builder;
@@ -103,6 +106,16 @@ namespace
       {
         FunctionVisitor{builder}.StmtVisitor::Visit(stmt);
       });
+    };
+  };
+
+  // Create a Callable<void(StmtBuilder&)> that builds up a an expression using
+  // its own private instance of ExprVisitor.
+  auto makeExprBuilder = [] (const Expr* expr)
+  {
+    return [expr] (StmtBuilder& builder)
+    {
+      ExprVisitor{builder}.Visit(expr);
     };
   };
 }
@@ -182,10 +195,7 @@ void FunctionVisitor::VisitVarDecl(const VarDecl* decl)
   {
     if(const auto* init = decl->getInit())
     {
-      _builder.declareVar(*decl, [init] (StmtBuilder& builder)
-      {
-        ExprVisitor{builder}.Visit(init);
-      });
+      _builder.declareVar(*decl, makeExprBuilder(init));
     }
     else
     {
@@ -198,10 +208,7 @@ void FunctionVisitor::VisitVarDecl(const VarDecl* decl)
 
 void FunctionVisitor::VisitExpr(const Expr* expr)
 {
-  _builder.buildStmt([expr] (StmtBuilder& builder)
-  {
-    ExprVisitor{builder}.Visit(expr);
-  });
+  _builder.buildStmt(makeExprBuilder(expr));
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -210,14 +217,94 @@ void FunctionVisitor::VisitExpr(const Expr* expr)
 
 void ExprVisitor::VisitBinaryOperator(const BinaryOperator* expr)
 {
-  _builder.emitBinaryOperator(*expr,
-                              [expr] (StmtBuilder& builder) { ExprVisitor{builder}.Visit(expr->getLHS()); },
-                              [expr] (StmtBuilder& builder) { ExprVisitor{builder}.Visit(expr->getRHS()); });
+  _builder.emitBinaryOperator(*expr, makeExprBuilder(expr->getLHS()), makeExprBuilder(expr->getRHS()));
+}
+
+void ExprVisitor::VisitCastExpr(const CastExpr* expr)
+{
+  // Even though the backend has to act according to the type of cast we can
+  // either prefilter some of the stuff that should never reach codegen or
+  // alter the process if necessary.
+  switch(expr->getCastKind())
+  {
+    case CK_NoOp:
+      Visit(expr->getSubExpr());
+      break;
+
+    case CK_LValueToRValue:
+      _builder.emitCast(*expr, makeExprBuilder(expr->getSubExpr()));
+      break;
+
+    case CK_Dependent:
+    case CK_BitCast:
+    case CK_LValueBitCast:
+    case CK_BaseToDerived:
+    case CK_DerivedToBase:
+    case CK_UncheckedDerivedToBase:
+    case CK_Dynamic:
+    case CK_ToUnion:
+    case CK_ArrayToPointerDecay:
+    case CK_FunctionToPointerDecay:
+    case CK_NullToPointer:
+    case CK_NullToMemberPointer:
+    case CK_BaseToDerivedMemberPointer:
+    case CK_DerivedToBaseMemberPointer:
+    case CK_MemberPointerToBoolean:
+    case CK_ReinterpretMemberPointer:
+    case CK_UserDefinedConversion:
+    case CK_ConstructorConversion:
+    case CK_IntegralToPointer:
+    case CK_PointerToIntegral:
+    case CK_PointerToBoolean:
+    case CK_ToVoid:
+    case CK_VectorSplat:
+    case CK_IntegralCast:
+    case CK_IntegralToBoolean:
+    case CK_IntegralToFloating:
+    case CK_FloatingToIntegral:
+    case CK_FloatingToBoolean:
+    case CK_FloatingCast:
+    case CK_CPointerToObjCPointerCast:
+    case CK_BlockPointerToObjCPointerCast:
+    case CK_AnyPointerToBlockPointerCast:
+    case CK_ObjCObjectLValueCast:
+    case CK_FloatingRealToComplex:
+    case CK_FloatingComplexToReal:
+    case CK_FloatingComplexToBoolean:
+    case CK_FloatingComplexCast:
+    case CK_FloatingComplexToIntegralComplex:
+    case CK_IntegralRealToComplex:
+    case CK_IntegralComplexToReal:
+    case CK_IntegralComplexToBoolean:
+    case CK_IntegralComplexCast:
+    case CK_IntegralComplexToFloatingComplex:
+    case CK_ARCProduceObject:
+    case CK_ARCConsumeObject:
+    case CK_ARCReclaimReturnedObject:
+    case CK_ARCExtendBlockObject:
+    case CK_AtomicToNonAtomic:
+    case CK_NonAtomicToAtomic:
+    case CK_CopyAndAutoreleaseBlockObject:
+    case CK_BuiltinFnToFnPtr:
+    case CK_ZeroToOCLEvent:
+    case CK_AddressSpaceConversion:
+        llvm_unreachable("cast not supported");
+  }
 }
 
 void ExprVisitor::VisitCXXBoolLiteralExpr(const CXXBoolLiteralExpr* expr)
 {
   _builder.emitBooleanLiteral(*expr);
+}
+
+void ExprVisitor::VisitDeclRefExpr(const DeclRefExpr* expr)
+{
+  if(auto* var = dyn_cast<VarDecl>(expr->getDecl()))
+  {
+    _builder.emitVariableAccess(*var);
+  }
+  else
+    llvm_unreachable("invalid decl ref target");
 }
 
 void ExprVisitor::VisitFloatingLiteral(const FloatingLiteral* expr)
@@ -232,7 +319,12 @@ void ExprVisitor::VisitIntegerLiteral(const IntegerLiteral* expr)
 
 void ExprVisitor::VisitParenExpr(const ParenExpr* expr)
 {
-  _builder.emitParenExpr([expr] (StmtBuilder& builder) { ExprVisitor{builder}.Visit(expr->getSubExpr()); });
+  _builder.emitParenExpr(makeExprBuilder(expr->getSubExpr()));
+}
+
+void ExprVisitor::VisitUnaryOperator(const UnaryOperator* expr)
+{
+  _builder.emitUnaryOperator(*expr, makeExprBuilder(expr->getSubExpr()));
 }
 
 ////////////////////////////////////////////////////////////////////////////////

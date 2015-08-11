@@ -90,12 +90,15 @@ public:
   template<class RHS, class LHS>
   bool emitBinaryOperator(const BinaryOperator& expr, RHS lhs, LHS rhs);
   bool emitBooleanLiteral(const CXXBoolLiteralExpr& expr);
+  template<class F>
+  bool emitCast(const CastExpr& expr, F subexpr);
   bool emitFloatingLiteral(const FloatingLiteral& expr);
   bool emitIntegerLiteral(const IntegerLiteral& literal);
   template<class F>
   bool emitParenExpr(F subexpr);
   template<class F>
   bool emitUnaryOperator(const UnaryOperator& expr, F subexpr);
+  bool emitVariableAccess(const VarDecl& var);
 
 private:
   TypeNamePrinter& _typeNamePrinter;

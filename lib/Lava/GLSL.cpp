@@ -233,6 +233,19 @@ bool glsl::StmtBuilder::emitBooleanLiteral(const CXXBoolLiteralExpr& expr)
   return true;
 }
 
+template<class F>
+bool glsl::StmtBuilder::emitCast(const CastExpr& expr, F subexpr)
+{
+  switch(expr.getCastKind())
+  {
+    case clang::CK_LValueToRValue:
+      return subexpr(*this);
+
+    default:
+      llvm_unreachable("cast not implemented");
+  }
+}
+
 bool glsl::StmtBuilder::emitFloatingLiteral(const FloatingLiteral& expr)
 {
 //  llvm::SmallVector<char, 64> str;
@@ -278,6 +291,12 @@ bool glsl::StmtBuilder::emitUnaryOperator(const UnaryOperator& expr, F subexpr)
     return true;
   }
   return false;
+}
+
+bool glsl::StmtBuilder::emitVariableAccess(const VarDecl& var)
+{
+  _w << var.getName();
+  return true;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
