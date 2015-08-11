@@ -588,10 +588,25 @@ bool spirv::FunctionBuilder::addParam(const ParmVarDecl& param)
 }
 
 template<class F>
-bool spirv::FunctionBuilder::buildStmt(F director)
+bool spirv::FunctionBuilder::buildReturnStmt(F exprDirector)
 {
   StmtBuilder stmt{_types, _variables};
-  return director(stmt);
+  if(exprDirector(stmt))
+  {
+    bool isVoid = _returnType == _builder.makeVoidType();
+    _builder.makeReturn(false, // Return stmts from the clang AST are never implicit
+                        isVoid ? 0 : _variables.load(stmt.expr()),
+                        false);
+    return true;
+  }
+  return false;
+}
+
+template<class F>
+bool spirv::FunctionBuilder::buildStmt(F exprDirector)
+{
+  StmtBuilder stmt{_types, _variables};
+  return exprDirector(stmt);
 }
 
 bool spirv::FunctionBuilder::declareUndefinedVar(const VarDecl& var)
@@ -603,12 +618,12 @@ bool spirv::FunctionBuilder::declareUndefinedVar(const VarDecl& var)
 }
 
 template<class F>
-bool spirv::FunctionBuilder::declareVar(const VarDecl& var, F director)
+bool spirv::FunctionBuilder::declareVar(const VarDecl& var, F initDirector)
 {
   StmtBuilder stmt{_types, _variables};
   // If the variable is loaded before being written to it produces an OpUndef value.
   // TODO: references
-  if(director(stmt))
+  if(initDirector(stmt))
   {
     _variables.store({0, &var, {}}, _variables.load(stmt.expr()));
     return true;
@@ -617,7 +632,7 @@ bool spirv::FunctionBuilder::declareVar(const VarDecl& var, F director)
 }
 
 template<class F>
-bool spirv::FunctionBuilder::pushScope(F director)
+bool spirv::FunctionBuilder::pushScope(F scopeDirector)
 {
   if(!_function)
   {
@@ -657,7 +672,7 @@ bool spirv::FunctionBuilder::pushScope(F director)
   }
   // We don't need any extra setup for a new scope, just continue the existing block.
   // It's an aspect of the frontend we don't have to care about.
-  return director();
+  return scopeDirector();
 }
 
 bool spirv::FunctionBuilder::setReturnType(QualType type)

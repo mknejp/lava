@@ -194,18 +194,15 @@ public:
   FunctionBuilder(FunctionDecl& decl, TypeCache& types, TypeMangler& mangler);
 
   bool addParam(const ParmVarDecl& param);
-
   template<class F>
-  bool buildStmt(F director);
-
+  bool buildReturnStmt(F exprDirector);
+  template<class F>
+  bool buildStmt(F exprDirector);
   bool declareUndefinedVar(const VarDecl& var);
-
   template<class F>
-  bool declareVar(const VarDecl& var, F director);
-
+  bool declareVar(const VarDecl& var, F initDirector);
   template<class F>
-  bool pushScope(F director);
-
+  bool pushScope(F scopeDirector);
   bool setReturnType(QualType type);
 
   spv::Id finalize();

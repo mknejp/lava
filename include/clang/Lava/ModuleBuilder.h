@@ -235,6 +235,7 @@ class clang::lava::FunctionBuilder
 {
   using Director = std::function<void(FunctionBuilder&)>;
   using StmtDirector = std::function<void(StmtBuilder&)>;
+
 public:
   /// \name Function header setup
   /// @{
@@ -254,11 +255,21 @@ public:
   /// \name Concent building
   /// @{
 
-  /// Build a new statement that is not the declaration of a new variable
+  /// Build the statement to return from a function.
+  /// \param expr A statement director for building the expression making up the return value. The director must produce a value if the function does not return void. It is allowed to produce an expression even if the function returns void.
+  /// \todo a cleanup director for inserting destructors at the correct place
   template<class F>
-  bool buildStmt(F&& director)
+  bool buildReturnStmt(F&& expr)
   {
-    auto f = StmtDirector{std::forward<F>(director)};
+    auto f = StmtDirector{std::forward<F>(expr)};
+    return _success = _success && buildReturnStmtImpl(f);
+  }
+  /// Build a new statement that is not the declaration of a new variable
+  /// \param stmt A statement directo to build the actual statement/expression.
+  template<class F>
+  bool buildStmt(F&& stmt)
+  {
+    auto f = StmtDirector{std::forward<F>(stmt)};
     return _success = _success && buildStmtImpl(f);
   }
   /// Declare a single new local variable with no definition.
@@ -266,19 +277,21 @@ public:
   {
     return _success = _success && declareUndefinedVarImpl(var);
   }
-  /// Declare a single new local variable with its definition provided by a statement built by \p director.
+  /// Declare a single new local variable with an initial value.
+  /// \param init a statement director to build the expression to initialize the variable with.
   template<class F>
-  bool declareVar(const VarDecl& var, F&& director)
+  bool declareVar(const VarDecl& var, F&& init)
   {
-    auto f = StmtDirector{std::forward<F>(director)};
+    auto f = StmtDirector{std::forward<F>(init)};
     return _success = _success && declareVarImpl(var, f);
   }
   /// Open a new local scope.
   /// At least one scope must be opened for a function that is not imported, even if it is trivial.
+  /// \param scope An unary director to build the nested scope constent.
   template<class F>
-  bool pushScope(F&& director)
+  bool pushScope(F&& scope)
   {
-    auto f = Director{std::forward<F>(director)};
+    auto f = Director{std::forward<F>(scope)};
     return _success = _success && pushScopeImpl(f);
   }
 
@@ -302,6 +315,7 @@ private:
 
   virtual bool addParamImpl(const ParmVarDecl& param) = 0;
   virtual bool buildStmtImpl(StmtDirector& director) = 0;
+  virtual bool buildReturnStmtImpl(StmtDirector& expr) = 0;
   virtual bool declareUndefinedVarImpl(const VarDecl& var) = 0;
   virtual bool declareVarImpl(const VarDecl& var, StmtDirector& director) = 0;
   virtual bool pushScopeImpl(Director& director) = 0;
@@ -323,21 +337,25 @@ private:
   {
     return _target.addParam(param);
   }
-  bool buildStmtImpl(StmtDirector& director) override
+  bool buildReturnStmtImpl(StmtDirector& expr) override
   {
-    return _target.buildStmt(DirectorInvoker<T, StmtBuilder>{_target, director});
+    return _target.buildReturnStmt(DirectorInvoker<T, StmtBuilder>{_target, expr});
+  }
+  bool buildStmtImpl(StmtDirector& stmt) override
+  {
+    return _target.buildStmt(DirectorInvoker<T, StmtBuilder>{_target, stmt});
   }
   bool declareUndefinedVarImpl(const VarDecl& var) override
   {
     return _target.declareUndefinedVar(var);
   }
-  bool declareVarImpl(const VarDecl& var, StmtDirector& director) override
+  bool declareVarImpl(const VarDecl& var, StmtDirector& init) override
   {
-    return _target.declareVar(var, DirectorInvoker<T, StmtBuilder>{_target, director});
+    return _target.declareVar(var, DirectorInvoker<T, StmtBuilder>{_target, init});
   }
-  bool pushScopeImpl(Director& director) override
+  bool pushScopeImpl(Director& scope) override
   {
-    return _target.pushScope([this, &director] { director(*this); return success(); });
+    return _target.pushScope([this, &scope] { scope(*this); return success(); });
   }
   bool setReturnTypeImpl(QualType type) override
   {

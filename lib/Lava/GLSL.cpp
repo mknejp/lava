@@ -297,10 +297,34 @@ bool glsl::FunctionBuilder::addParam(const ParmVarDecl& param)
 }
 
 template<class F>
-bool glsl::FunctionBuilder::buildStmt(F director)
+bool glsl::FunctionBuilder::buildReturnStmt(F exprDirector)
 {
   StmtBuilder stmt{_typeNamePrinter, _w};
-  if(director(stmt))
+  if(_returnType->isVoidType())
+  {
+    if(exprDirector(stmt))
+    {
+      _w << ';' << _w.endln() << "return;" << _w.endln();
+      return true;
+    }
+  }
+  else
+  {
+    _w << "return ";
+    if(exprDirector(stmt))
+    {
+      _w << ';' << _w.endln();
+      return true;
+    }
+  }
+  return false;
+}
+
+template<class F>
+bool glsl::FunctionBuilder::buildStmt(F stmtDirector)
+{
+  StmtBuilder stmt{_typeNamePrinter, _w};
+  if(stmtDirector(stmt))
   {
     _w << ';' << _w.endln();
     return true;
@@ -316,12 +340,12 @@ bool glsl::FunctionBuilder::declareUndefinedVar(const VarDecl& var)
 }
 
 template<class F>
-bool glsl::FunctionBuilder::declareVar(const VarDecl& var, F director)
+bool glsl::FunctionBuilder::declareVar(const VarDecl& var, F initDirector)
 {
   StmtBuilder stmt{_typeNamePrinter, _w};
   _typeNamePrinter.printTypeName(var.getType(), _w);
   _w << ' ' << var.getName() << " = ";
-  if(director(stmt))
+  if(initDirector(stmt))
   {
     _w << ';' << _w.endln();
     return true;
@@ -330,7 +354,7 @@ bool glsl::FunctionBuilder::declareVar(const VarDecl& var, F director)
 }
 
 template<class F>
-bool glsl::FunctionBuilder::pushScope(F director)
+bool glsl::FunctionBuilder::pushScope(F scopeDirector)
 {
   if(_declString.empty())
   {
@@ -340,7 +364,7 @@ bool glsl::FunctionBuilder::pushScope(F director)
   }
   _w << '{' << _w.endln();
   _w.increase();
-  if(director())
+  if(scopeDirector())
   {
     _w.decrease();
     _w << '}' << _w.endln();

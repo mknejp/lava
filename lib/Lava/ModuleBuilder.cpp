@@ -46,6 +46,7 @@ namespace
     // Statements
     void VisitCompoundStmt(const CompoundStmt* stmt);
     void VisitDeclStmt(const DeclStmt* stmt);
+    void VisitReturnStmt(const ReturnStmt* stmt);
 
     // Declarations
     void VisitVarDecl(const VarDecl* decl);
@@ -80,11 +81,11 @@ namespace
 
 void FunctionVisitor::VisitCompoundStmt(const CompoundStmt* stmt)
 {
-  _builder.pushScope([stmt, this] (FunctionBuilder& builder)
+  _builder.pushScope([stmt] (FunctionBuilder& builder)
   {
     for(const auto* stmt : stmt->body())
     {
-      StmtVisitor::Visit(stmt);
+      FunctionVisitor{builder}.StmtVisitor::Visit(stmt);
     }
   });
 }
@@ -95,6 +96,18 @@ void FunctionVisitor::VisitDeclStmt(const DeclStmt* stmt)
   {
     DeclVisitor::Visit(decl);
   }
+}
+
+void FunctionVisitor::VisitReturnStmt(const ReturnStmt* stmt)
+{
+  // TODO: run destructors
+  _builder.buildReturnStmt([stmt, this] (StmtBuilder& builder)
+  {
+    if(auto* expr = stmt->getRetValue())
+    {
+      ExprVisitor{builder}.Visit(expr);
+    }
+  });
 }
 
 void FunctionVisitor::VisitVarDecl(const VarDecl* decl)
@@ -132,8 +145,8 @@ void FunctionVisitor::VisitExpr(const Expr* expr)
 void ExprVisitor::VisitBinaryOperator(const BinaryOperator* expr)
 {
   _builder.emitBinaryOperator(*expr,
-                              [expr, this] (StmtBuilder&) { Visit(expr->getLHS()); },
-                              [expr, this] (StmtBuilder&) { Visit(expr->getRHS()); });
+                              [expr] (StmtBuilder& builder) { ExprVisitor{builder}.Visit(expr->getLHS()); },
+                              [expr] (StmtBuilder& builder) { ExprVisitor{builder}.Visit(expr->getRHS()); });
 }
 
 void ExprVisitor::VisitCXXBoolLiteralExpr(const CXXBoolLiteralExpr* expr)
@@ -153,7 +166,7 @@ void ExprVisitor::VisitIntegerLiteral(const IntegerLiteral* expr)
 
 void ExprVisitor::VisitParenExpr(const ParenExpr* expr)
 {
-  _builder.emitParenExpr([expr, this] (StmtBuilder&) { Visit(expr->getSubExpr()); });
+  _builder.emitParenExpr([expr] (StmtBuilder& builder) { ExprVisitor{builder}.Visit(expr->getSubExpr()); });
 }
 
 ////////////////////////////////////////////////////////////////////////////////
