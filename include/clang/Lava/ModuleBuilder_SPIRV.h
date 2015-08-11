@@ -86,17 +86,17 @@ struct clang::lava::spirv::Variable
 {
   // The id under which the frontend refers to this variable.
   const VarDecl* var;
-  // If this is != 0 the variable is of pointer type
+  // If this is != NoResult the variable is of pointer type
   spv::Id pointer;
   // The Result<id> holding the most recent value of this variable that can be directly used in computations.
-  // Can only be 0 if pointer != 0, meaning the value must be loaded from the pointer before use.
+  // Can only be NoResult if pointer != NoResult, meaning the value must be loaded from the pointer before use.
   spv::Id value;
-  // Only relevant if pointer != 0
+  // Only relevant if pointer != NoResult
   spv::StorageClass storage;
-  // True if loads/stores must not be removed. Only relevant if pointer != 0
+  // True if loads/stores must not be removed. Only relevant if pointer != NoResult
   // Even thugh the decoration goes to a OpVariable we need to know whether to emit a load/store or not.
   bool isVolatile : 1;
-  // Only used if pointer != 0.
+  // Only used if pointer != NoResult.
   // True if there is a chance the value has changed since the most recent load.
   // This is used to figure out whether we need to store a variable before calling a function (in case the callee reads its value) or exiting the current function.
   bool isDirty : 1;
@@ -118,7 +118,7 @@ struct clang::lava::spirv::ExprResult
 
   void reset()
   {
-    value = 0;
+    value = spv::NoResult;
     variable = nullptr;
     chain.clear();
   }
@@ -215,7 +215,7 @@ private:
   TypeMangler& _mangler;
   
   FunctionDecl& _decl;
-  spv::Id _returnType = 0;
+  spv::Id _returnType = spv::NoType;
   spv::Function* _function = nullptr;
   std::vector<const ParmVarDecl*> _params;
   Variables _variables{_types};

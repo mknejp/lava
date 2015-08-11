@@ -250,7 +250,7 @@ spv::Id spirv::Variables::load(const VarDecl& decl)
     var.inited = false;
     init.release();
   }
-  else if(var.value == 0)
+  else if(var.value == spv::NoResult)
   {
     auto id = _builder.createLoad(var.pointer);
     var.isDirty = false;
@@ -288,7 +288,7 @@ spirv::ExprResult spirv::Variables::store(const ExprResult& target, spv::Id valu
     if(var.isVolatile)
     {
       _builder.createStore(value, var.pointer);
-      return {0, target.variable, {}};
+      return {spv::NoResult, target.variable, {}};
     }
     else
     {
@@ -311,12 +311,12 @@ void spirv::Variables::trackVariable(const VarDecl& decl, spv::Id id)
   auto isReference = ref != nullptr;
   _vars.push_back({
     &decl,
-    isReference ? id : 0,
-    isReference ? 0 : id,
+    isReference ? id : spv::NoResult,
+    isReference ? spv::NoResult : id,
     spv::StorageClassFunction,
     isReference && ref->getPointeeType().isVolatileQualified(),
     false,
-    id == 0,
+    id == spv::NoResult,
   });
 }
 
@@ -336,7 +336,7 @@ spirv::Variable& spirv::Variables::find(const VarDecl* decl)
       {
         // If a local variable is not tracked yet it means it is not initialized.
         // If loaded it produces an OpUndef value.
-        trackVariable(*decl, 0);
+        trackVariable(*decl, spv::NoResult);
         return _vars.back();
       }
       else
@@ -595,7 +595,7 @@ bool spirv::FunctionBuilder::buildReturnStmt(F exprDirector)
   {
     bool isVoid = _returnType == _builder.makeVoidType();
     _builder.makeReturn(false, // Return stmts from the clang AST are never implicit
-                        isVoid ? 0 : _variables.load(stmt.expr()),
+                        isVoid ? spv::NoResult : _variables.load(stmt.expr()),
                         false);
     return true;
   }
@@ -625,7 +625,7 @@ bool spirv::FunctionBuilder::declareVar(const VarDecl& var, F initDirector)
   // TODO: references
   if(initDirector(stmt))
   {
-    _variables.store({0, &var, {}}, _variables.load(stmt.expr()));
+    _variables.store({spv::NoResult, &var, {}}, _variables.load(stmt.expr()));
     return true;
   }
   return false;
@@ -638,7 +638,7 @@ bool spirv::FunctionBuilder::pushScope(F scopeDirector)
   {
     // This is the first block in the function.
     // This means we know the entire signature and can create the type.
-    assert(_returnType != 0 && "return type not yet set");
+    assert(_returnType != spv::NoType && "return type not yet set");
 
     auto params = std::vector<spv::Id>{};
     std::transform(_params.begin(), _params.end(),
@@ -677,7 +677,7 @@ bool spirv::FunctionBuilder::pushScope(F scopeDirector)
 
 bool spirv::FunctionBuilder::setReturnType(QualType type)
 {
-  assert(_returnType == 0 && "return type already set");
+  assert(_returnType == spv::NoType && "return type already set");
   _returnType = _types[type];
   return true;
 }
