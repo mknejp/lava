@@ -587,15 +587,53 @@ bool spirv::FunctionBuilder::addParam(const ParmVarDecl& param)
   return true;
 }
 
+template<class F1, class F2>
+bool spirv::FunctionBuilder::buildIfStmt(F1 condDirector, F2 thenDirector)
+{
+  StmtBuilder stmt{_types, _vars};
+  if(condDirector(stmt))
+  {
+    // TODO: selection control
+    spv::Builder::If ifBuilder{load(stmt.expr()), _builder};
+    if(thenDirector(*this))
+    {
+      ifBuilder.makeEndIf();
+      return true;
+    }
+  }
+  return false;
+}
+
+template<class F1, class F2, class F3>
+bool spirv::FunctionBuilder::buildIfStmt(F1 condDirector, F2 thenDirector, F3 elseDirector)
+{
+  StmtBuilder stmt{_types, _vars};
+  if(condDirector(stmt))
+  {
+    // TODO: selection control
+    spv::Builder::If ifBuilder{load(stmt.expr()), _builder};
+    if(thenDirector(*this))
+    {
+      ifBuilder.makeBeginElse();
+      if(elseDirector(*this))
+      {
+        ifBuilder.makeEndIf();
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 template<class F>
 bool spirv::FunctionBuilder::buildReturnStmt(F exprDirector)
 {
-  StmtBuilder stmt{_types, _variables};
+  StmtBuilder stmt{_types, _vars};
   if(exprDirector(stmt))
   {
     bool isVoid = _returnType == _builder.makeVoidType();
     _builder.makeReturn(false, // Return stmts from the clang AST are never implicit
-                        isVoid ? spv::NoResult : _variables.load(stmt.expr()),
+                        isVoid ? spv::NoResult : load(stmt.expr()),
                         false);
     return true;
   }
@@ -605,13 +643,13 @@ bool spirv::FunctionBuilder::buildReturnStmt(F exprDirector)
 template<class F>
 bool spirv::FunctionBuilder::buildStmt(F exprDirector)
 {
-  StmtBuilder stmt{_types, _variables};
+  StmtBuilder stmt{_types, _vars};
   return exprDirector(stmt);
 }
 
 bool spirv::FunctionBuilder::declareUndefinedVar(const VarDecl& var)
 {
-  StmtBuilder stmt{_types, _variables};
+  StmtBuilder stmt{_types, _vars};
   // Nothing to do here.
   // If the variable is loaded before being written to it produces an OpUndef value.
   return true;
@@ -620,12 +658,12 @@ bool spirv::FunctionBuilder::declareUndefinedVar(const VarDecl& var)
 template<class F>
 bool spirv::FunctionBuilder::declareVar(const VarDecl& var, F initDirector)
 {
-  StmtBuilder stmt{_types, _variables};
+  StmtBuilder stmt{_types, _vars};
   // If the variable is loaded before being written to it produces an OpUndef value.
   // TODO: references
   if(initDirector(stmt))
   {
-    _variables.store({spv::NoResult, &var, {}}, _variables.load(stmt.expr()));
+    store({spv::NoResult, &var, {}}, load(stmt.expr()));
     return true;
   }
   return false;
@@ -667,7 +705,7 @@ bool spirv::FunctionBuilder::pushScope(F scopeDirector)
     for(auto i = 0u; i < params.size(); ++i)
     {
       _builder.addName(_function->getParamId(i), _params[i]->getNameAsString().c_str());
-      _variables.trackVariable(*_params[i], _function->getParamId(i));
+      _vars.trackVariable(*_params[i], _function->getParamId(i));
     }
   }
   // We don't need any extra setup for a new scope, just continue the existing block.

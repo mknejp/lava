@@ -175,7 +175,7 @@ private:
 
   static ExprResult makeRValue(spv::Id value) { return {value, nullptr, {}}; }
 
-    spv::Id load(const VarDecl& decl) { return _vars.load(decl); }
+  spv::Id load(const VarDecl& decl) { return _vars.load(decl); }
   spv::Id load(const ExprResult& expr) { return _vars.load(expr); }
   ExprResult store(const ExprResult& target, spv::Id value) { return _vars.store(target, value); }
   ExprResult makePrefixOp(const ExprResult& lvalue, QualType type, IncDecOperator op);
@@ -194,6 +194,10 @@ public:
   FunctionBuilder(FunctionDecl& decl, TypeCache& types, TypeMangler& mangler);
 
   bool addParam(const ParmVarDecl& param);
+  template<class F1, class F2>
+  bool buildIfStmt(F1 condDirector, F2 thenDirector);
+  template<class F1, class F2, class F3>
+  bool buildIfStmt(F1 condDirector, F2 thenDirector, F3 elseDirector);
   template<class F>
   bool buildReturnStmt(F exprDirector);
   template<class F>
@@ -208,6 +212,9 @@ public:
   spv::Id finalize();
 
 private:
+  spv::Id load(const VarDecl& decl) { return _vars.load(decl); }
+  spv::Id load(const ExprResult& expr) { return _vars.load(expr); }
+  ExprResult store(const ExprResult& target, spv::Id value) { return _vars.store(target, value); }
   void trackParameter(const ParmVarDecl& param, spv::Id id);
 
   TypeCache& _types;
@@ -218,7 +225,7 @@ private:
   spv::Id _returnType = spv::NoType;
   spv::Function* _function = nullptr;
   std::vector<const ParmVarDecl*> _params;
-  Variables _variables{_types};
+  Variables _vars{_types};
 };
 
 class clang::lava::spirv::ModuleBuilder

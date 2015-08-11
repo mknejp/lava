@@ -108,6 +108,10 @@ public:
   FunctionBuilder(FunctionDecl& decl, TypeNamePrinter& typeNamePrinter);
 
   bool addParam(const ParmVarDecl& param);
+  template<class F1, class F2>
+  bool buildIfStmt(F1 condDirector, F2 thenDirector);
+  template<class F1, class F2, class F3>
+  bool buildIfStmt(F1 condDirector, F2 thenDirector, F3 elseDirector);
   template<class F>
   bool buildReturnStmt(F exprDirector);
   template<class F>

@@ -46,6 +46,7 @@ namespace
     // Statements
     void VisitCompoundStmt(const CompoundStmt* stmt);
     void VisitDeclStmt(const DeclStmt* stmt);
+    void VisitIfStmt(const IfStmt* stmt);
     void VisitReturnStmt(const ReturnStmt* stmt);
 
     // Declarations
@@ -73,6 +74,37 @@ namespace
   private:
     StmtBuilder& _builder;
   };
+
+  // If the stament is not a CompoundStmt insert a new scope anyway.
+  // Use this everywhere the source language allows a single statement without
+  // enclosing braces. Since we may have to emit destructor calls or split up
+  // multiple variable declarations into multiple statements this ensures the
+  // target language generator has a way to group everything together.
+  template<class F>
+  void forceScope(const Stmt* stmt, FunctionBuilder& builder, F&& f)
+  {
+    if(dyn_cast<CompoundStmt>(stmt))
+    {
+      f(builder);
+    }
+    else
+    {
+      builder.pushScope(std::forward<F>(f));
+    }
+  }
+
+  // Create a Callable<void(FunctionBuilder&)> that builds up a block using
+  // its own private instance of FunctionVisitor.
+  auto makeBlockBuilder = [] (const Stmt* stmt)
+  {
+    return [stmt] (FunctionBuilder& builder)
+    {
+      forceScope(stmt, builder, [stmt] (FunctionBuilder& builder)
+      {
+        FunctionVisitor{builder}.StmtVisitor::Visit(stmt);
+      });
+    };
+  };
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -95,6 +127,40 @@ void FunctionVisitor::VisitDeclStmt(const DeclStmt* stmt)
   for(const auto* decl : stmt->decls())
   {
     DeclVisitor::Visit(decl);
+  }
+}
+
+void FunctionVisitor::VisitIfStmt(const IfStmt* stmt)
+{
+  auto build = [stmt] (FunctionBuilder& builder)
+  {
+    if(stmt->getElse())
+    {
+      builder.buildIfStmt([stmt] (StmtBuilder& builder) { ExprVisitor{builder}.Visit(stmt->getCond()); },
+                          makeBlockBuilder(stmt->getThen()),
+                          makeBlockBuilder(stmt->getElse()));
+    }
+    else
+    {
+      builder.buildIfStmt([stmt] (StmtBuilder& builder) { ExprVisitor{builder}.Visit(stmt->getCond()); },
+                          makeBlockBuilder(stmt->getThen()));
+    }
+  };
+
+  if(stmt->getConditionVariable())
+  {
+    // If the condition declares a variable open a new scope to ensure its name
+    // doesn't clash with a variable that is already declared and makes it go
+    // out of scope immediately following the if/then/else stmt.
+    _builder.pushScope([&] (FunctionBuilder& builder)
+    {
+      FunctionVisitor{builder}.VisitDeclStmt(stmt->getConditionVariableDeclStmt());
+      build(builder);
+    });
+  }
+  else
+  {
+    build(_builder);
   }
 }
 

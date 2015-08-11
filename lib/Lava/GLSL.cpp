@@ -296,6 +296,30 @@ bool glsl::FunctionBuilder::addParam(const ParmVarDecl& param)
   return true;
 }
 
+template<class F1, class F2>
+bool glsl::FunctionBuilder::buildIfStmt(F1 condDirector, F2 thenDirector)
+{
+  _w << "if(";
+  StmtBuilder condStmt{_typeNamePrinter, _w};
+  if(condDirector(condStmt))
+  {
+    _w << ')' << _w.endln();
+    return thenDirector(*this);
+  }
+  return false;
+}
+
+template<class F1, class F2, class F3>
+bool glsl::FunctionBuilder::buildIfStmt(F1 condDirector, F2 thenDirector, F3 elseDirector)
+{
+  if(buildIfStmt(std::move(condDirector), std::move(thenDirector)))
+  {
+    _w << "else" << _w.endln();
+    return elseDirector(*this);
+  }
+  return false;
+}
+
 template<class F>
 bool glsl::FunctionBuilder::buildReturnStmt(F exprDirector)
 {

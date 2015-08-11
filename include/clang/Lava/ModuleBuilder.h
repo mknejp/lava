@@ -255,6 +255,30 @@ public:
   /// \name Concent building
   /// @{
 
+  /// Build an if statement without an else part.
+  /// The condition must not declare a new variable as that is not supported by some target languages.
+  /// \pram cond A statement director to build up the condition expression.
+  /// \pram then An unarry director to build up the content of the then-block.
+  template<class F1, class F2>
+  bool buildIfStmt(F1&& cond, F2&& then)
+  {
+    auto f1 = StmtDirector{std::forward<F1>(cond)};
+    auto f2 = Director{std::forward<F2>(then)};
+    return _success = _success && buildIfStmtImpl(f1, f2);
+  }
+  /// Build an if statement with an else part.
+  /// The condition must not declare a new variable as that is not supported by some target languages.
+  /// \pram cond A statement director to build up the condition.
+  /// \pram then An unary director to build up the content of the then-block expression.
+  /// \pram orElse An unary director to build up the content of the else-block.
+  template<class F1, class F2, class F3>
+  bool buildIfStmt(F1&& cond, F2&& then, F3&& orElse)
+  {
+    auto f1 = StmtDirector{std::forward<F1>(cond)};
+    auto f2 = Director{std::forward<F2>(then)};
+    auto f3 = Director{std::forward<F3>(orElse)};
+    return _success = _success && buildIfStmtImpl(f1, f2, f3);
+  }
   /// Build the statement to return from a function.
   /// \param expr A statement director for building the expression making up the return value. The director must produce a value if the function does not return void. It is allowed to produce an expression even if the function returns void.
   /// \todo a cleanup director for inserting destructors at the correct place
@@ -314,8 +338,10 @@ private:
   bool success() const { return _success; }
 
   virtual bool addParamImpl(const ParmVarDecl& param) = 0;
-  virtual bool buildStmtImpl(StmtDirector& director) = 0;
+  virtual bool buildIfStmtImpl(StmtDirector& cond, Director& then) = 0;
+  virtual bool buildIfStmtImpl(StmtDirector& cond, Director& then, Director& orElse) = 0;
   virtual bool buildReturnStmtImpl(StmtDirector& expr) = 0;
+  virtual bool buildStmtImpl(StmtDirector& director) = 0;
   virtual bool declareUndefinedVarImpl(const VarDecl& var) = 0;
   virtual bool declareVarImpl(const VarDecl& var, StmtDirector& director) = 0;
   virtual bool pushScopeImpl(Director& director) = 0;
@@ -336,6 +362,17 @@ private:
   bool addParamImpl(const ParmVarDecl& param) override
   {
     return _target.addParam(param);
+  }
+  bool buildIfStmtImpl(StmtDirector& cond, Director& then, Director& orElse) override
+  {
+    return _target.buildIfStmt(DirectorInvoker<T, StmtBuilder>{_target, cond},
+                               DirectorInvoker<T, FunctionBuilder>{_target, then},
+                               DirectorInvoker<T, FunctionBuilder>{_target, orElse});
+  }
+  bool buildIfStmtImpl(StmtDirector& cond, Director& then) override
+  {
+    return _target.buildIfStmt(DirectorInvoker<T, StmtBuilder>{_target, cond},
+                               DirectorInvoker<T, FunctionBuilder>{_target, then});
   }
   bool buildReturnStmtImpl(StmtDirector& expr) override
   {
