@@ -18,6 +18,7 @@
 #include "clang/Lava/CodePrintingTools.h"
 #include "clang/Lava/SPIRV.h"
 #include "SPIRV/SpvBuilder.h"
+#include <stack>
 
 namespace clang
 {
@@ -31,6 +32,7 @@ namespace clang
     
     namespace spirv
     {
+      class BlockVariables;
       struct ExprResult;
       class FunctionBuilder;
       class ModuleBuilder;
@@ -38,7 +40,7 @@ namespace clang
       class StmtBuilder;
       class TypeCache;
       struct Variable;
-      class Variables;
+      class VariablesStack;
     }
   }
 }
@@ -90,6 +92,8 @@ struct clang::lava::spirv::Variable
   spv::Id pointer;
   // The Result<id> holding the most recent value of this variable that can be directly used in computations.
   // Can only be NoResult if pointer != NoResult, meaning the value must be loaded from the pointer before use.
+  // NoResult is only valid for volatile pointers and pointer parameters which weren't loaded yet.
+  // Once a variable has been loaded or stored this field can never get NoResult again (except for volatile).
   spv::Id value;
   // Only relevant if pointer != NoResult
   spv::StorageClass storage;
@@ -121,46 +125,74 @@ struct clang::lava::spirv::ExprResult
   }
 };
 
-// Track the state of all variables in a function
-class clang::lava::spirv::Variables
+// Track the state of all variables in a block
+class clang::lava::spirv::BlockVariables
 {
 public:
-  Variables(TypeCache& types, Variables* parent, spv::Block* block = nullptr);
+  BlockVariables(TypeCache& types, BlockVariables* parent, spv::Block* block = nullptr);
 
   spv::Id load(const VarDecl& decl);
   spv::Id load(const ExprResult& expr);
   ExprResult store(const ExprResult& target, spv::Id value);
+  void storeIfDirty(Variable& var);
   void setBlock(spv::Block* block);
   void trackUndefVariable(const VarDecl& decl);
   // Set id = 0 to indicate a local uninitialized variable
   void trackVariable(const VarDecl& decl, spv::Id id);
-  // Merge the values of all variables across multiple blocks by inserting
-  // OpPhi and other misc instructions. Must be called for the dominating block.
-  void merge(llvm::ArrayRef<Variables> dominatedBlocks);
   // The given variable is currently being initialized.
   // If the variable is read we track it and assign it an OpUndef value.
   // It is the *only* variable which may be read if not being tracked.
   void markAsInitializing(const VarDecl& decl);
 
+  // Merge the variables coming from control flow blocks and insert
+  // OpPhi instructions at the beginning of the merge block ot stores in the
+  // preceding blocks. Must be called on the instance associated with the block
+  // immerdiately dominating all blocks in the given range.
+  //
+  // The Variable objects in the range are moved from and must not be used after
+  // this call. Expects the current build point to be the merge block.
+  //
+  // This must only be used for forward control flow merging, i.e. if/then/else,
+  // switch/case/default, loop exits and "break", but not "continue".
+  template<class Iter>
+  void mergeForward(Iter first, Iter last);
+
 private:
+  class Merger;
+
   Variable& find(const VarDecl* decl);
   Variable* tryFind(const VarDecl* decl);
   Variable* tryFindInParent(const VarDecl* decl);
+  Variable* tryFindRecursive(const VarDecl* decl);
   void sort();
   spv::Id initUndefined(const VarDecl* decl);
 
   TypeCache& _types;
   spv::Builder& _builder;
   std::vector<Variable> _vars;
-  Variables* _parent;
+  BlockVariables* _parent;
   spv::Block* _block = nullptr;
   const VarDecl* _initing = nullptr;
+};
+
+class clang::lava::spirv::VariablesStack
+{
+public:
+  VariablesStack(TypeCache& types);
+
+  BlockVariables& top() { return *_varStack.top(); }
+  void push(BlockVariables& vars) { _varStack.push(&vars); }
+  void pop() { _varStack.pop(); }
+
+private:
+  BlockVariables _rootVars;
+  std::stack<BlockVariables*, llvm::SmallVector<BlockVariables*, 32>> _varStack;
 };
 
 class clang::lava::spirv::StmtBuilder
 {
 public:
-  StmtBuilder(TypeCache& types, Variables& variables);
+  StmtBuilder(TypeCache& types, BlockVariables& variables);
 
   template<class RHS, class LHS>
   bool emitBinaryOperator(const BinaryOperator& expr, RHS lhs, LHS rhs);
@@ -198,7 +230,7 @@ private:
   TypeCache& _types;
   spv::Builder& _builder;
   ExprResult _subexpr{}; // The result and classification of the most recent expression
-  Variables& _vars;
+  BlockVariables& _vars;
 };
 
 class clang::lava::spirv::FunctionBuilder
@@ -225,9 +257,9 @@ public:
   spv::Id finalize();
 
 private:
-  spv::Id load(const VarDecl& decl) { return _vars.load(decl); }
-  spv::Id load(const ExprResult& expr) { return _vars.load(expr); }
-  ExprResult store(const ExprResult& target, spv::Id value) { return _vars.store(target, value); }
+  spv::Id load(const VarDecl& decl) { return _vars.top().load(decl); }
+  spv::Id load(const ExprResult& expr) { return _vars.top().load(expr); }
+  ExprResult store(const ExprResult& target, spv::Id value) { return _vars.top().store(target, value); }
   void trackParameter(const ParmVarDecl& param, spv::Id id);
 
   TypeCache& _types;
@@ -238,7 +270,7 @@ private:
   spv::Id _returnType = spv::NoType;
   spv::Function* _function = nullptr;
   std::vector<const ParmVarDecl*> _params;
-  Variables _vars{_types, nullptr};
+  VariablesStack _vars{_types};
 };
 
 class clang::lava::spirv::ModuleBuilder
