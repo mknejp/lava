@@ -236,7 +236,7 @@ class spirv::VariablesStack::Merger
 {
 public:
   template<class Iter>
-  Merger(VariablesStack& self, Iter first, Iter last, bool reachableFromParent);
+  Merger(VariablesStack& self, Iter first, Iter last);
 
 private:
   struct Var
@@ -254,12 +254,12 @@ private:
   Grouped _grouped;
   llvm::SmallVector<spv::Block*, 8> _blocks;
   std::vector<unsigned> _operands;
-  bool _reachableFromParent;
+  spv::Block* const _mergeBlock;
 };
 
 template<class Iter>
-spirv::VariablesStack::Merger::Merger(VariablesStack& self, Iter first, Iter last, bool reachableFromParent)
-: _reachableFromParent(reachableFromParent)
+spirv::VariablesStack::Merger::Merger(VariablesStack& self, Iter first, Iter last)
+: _mergeBlock(self._builder.getBuildPoint())
 {
   groupByVarDecl(std::move(first), std::move(last));
   for(auto& kvp : _grouped)
@@ -306,7 +306,7 @@ void spirv::VariablesStack::Merger::processVariable(Grouped::value_type& group,
       // the dominating block.
       llvm::DenseSet<spv::Block*> writtenBlocks;
       _operands.clear();
-      if(_reachableFromParent)
+      if(_mergeBlock->hasPredecessor(self.top().block))
       {
         _operands.push_back(myVar->value);
         _operands.push_back(self.top().block->getId());
@@ -351,11 +351,16 @@ void spirv::VariablesStack::Merger::groupByVarDecl(Iter first, Iter last)
   // Separate all variables and process them in batches
   for(; first != last; ++first)
   {
-    _blocks.push_back(first->block);
-    for(auto& var : first->vars)
+    // If this block doesn't directly branch to the merge block it's a break or
+    // continue block in a loop/selection merge block and deoesn't contribute.
+    if(_mergeBlock->hasPredecessor(first->block))
     {
-      auto decl = var.decl;
-      _grouped[decl].push_back({std::move(var), first->block});
+      _blocks.push_back(first->block);
+      for(auto& var : first->vars)
+      {
+        auto decl = var.decl;
+        _grouped[decl].push_back({std::move(var), first->block});
+      }
     }
   }
   std::sort(_blocks.begin(), _blocks.end());
@@ -868,7 +873,7 @@ bool spirv::FunctionBuilder::buildIfStmt(F1 condDirector, F2 thenDirector)
       auto thenVars = _vars.popAndGet();
 
       // TODO: merge
-      _vars.merge(&thenVars, &thenVars + 1, _builder.getBuildPoint(), true);
+      _vars.merge(&thenVars, &thenVars + 1, _builder.getBuildPoint());
       _vars.setTopBlock(_builder.getBuildPoint());
 
       return true;
@@ -902,7 +907,7 @@ bool spirv::FunctionBuilder::buildIfStmt(F1 condDirector, F2 thenDirector, F3 el
         blockVars.push_back(_vars.popAndGet());
 
         // TODO: merge
-        _vars.merge(blockVars.begin(), blockVars.end(), _builder.getBuildPoint(), false);
+        _vars.merge(blockVars.begin(), blockVars.end(), _builder.getBuildPoint());
         _vars.setTopBlock(_builder.getBuildPoint());
       }
       return true;

@@ -191,7 +191,7 @@ public:
   // This must only be used for forward control flow merging, i.e. if/then/else,
   // switch/case/default, loop exits and "break", but not "continue".
   template<class Iter>
-  void merge(Iter first, Iter last, spv::Block* mergeBlock, bool reachableFromParent);
+  void merge(Iter first, Iter last, spv::Block* mergeBlock);
 
 private:
   static Variable* tryFind(const VarDecl* decl, BlockVariables& blockVars);
