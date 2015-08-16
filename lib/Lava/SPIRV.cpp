@@ -19,6 +19,7 @@
 using namespace clang;
 using namespace lava;
 
+using spirv::Id;
 using llvm::StringRef;
 
 ModuleBuilder clang::lava::spirv::createModuleBuilder(ASTContext& ast)
@@ -101,7 +102,7 @@ namespace
 // TypeCache
 //
 
-spv::Id spirv::TypeCache::get(QualType type) const
+Id spirv::TypeCache::get(QualType type) const
 {
   if(auto* arr = llvm::dyn_cast_or_null<ConstantArrayType>(type->getAsArrayTypeUnsafe()))
   {
@@ -164,12 +165,12 @@ spv::Id spirv::TypeCache::get(QualType type) const
   llvm_unreachable("type not supported/implemented for SPIR-V");
 }
 
-spv::Id spirv::TypeCache::getPointer(QualType type, spv::StorageClass storage) const
+Id spirv::TypeCache::getPointer(QualType type, spv::StorageClass storage) const
 {
   return _builder.makePointer(storage, get(type));
 }
 
-void spirv::TypeCache::add(CXXRecordDecl* decl, spv::Id id)
+void spirv::TypeCache::add(CXXRecordDecl* decl, Id id)
 {
   assert(_builtRecords.find(decl) == _builtRecords.end()
          && "Records must be added at most once");
@@ -215,7 +216,7 @@ bool spirv::RecordBuilder::addCapture(QualType type, llvm::StringRef identifier)
   return true;
 }
 
-spv::Id spirv::RecordBuilder::finalize()
+Id spirv::RecordBuilder::finalize()
 {
   auto id = _types.builder().makeStructType(_members, _name.c_str());
 
@@ -228,112 +229,133 @@ spv::Id spirv::RecordBuilder::finalize()
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-// BlockVariables::Merger
+// VariablesStack::Merger
 //
 
-class spirv::BlockVariables::Merger
+class spirv::VariablesStack::Merger
 {
 public:
   template<class Iter>
-  Merger(BlockVariables& self, Iter first, Iter last);
+  Merger(VariablesStack& self, Iter first, Iter last, bool reachableFromParent);
 
 private:
   struct Var
   {
-    Variable var;
-    BlockVariables* vars;
+    Variable variable;
+    spv::Block* block;
   };
+  using Grouped = std::map<const VarDecl*, std::vector<Var>>;
 
+  void processVariable(Grouped::value_type& kvp, VariablesStack& self);
   template<class Iter>
-  void splitByVarDecl(Iter first, Iter last);
+  void groupByVarDecl(Iter first, Iter last);
   void storeIfDirty(std::vector<Var>& group);
 
-  std::map<const VarDecl*, std::vector<Var>> _grouped;
-  llvm::SmallVector<spv::Block*, 32> _blocks;
+  Grouped _grouped;
+  llvm::SmallVector<spv::Block*, 8> _blocks;
   std::vector<unsigned> _operands;
+  bool _reachableFromParent;
 };
 
 template<class Iter>
-spirv::BlockVariables::Merger::Merger(BlockVariables& self, Iter first, Iter last)
+spirv::VariablesStack::Merger::Merger(VariablesStack& self, Iter first, Iter last, bool reachableFromParent)
+: _reachableFromParent(reachableFromParent)
 {
-  splitByVarDecl(std::move(first), std::move(last));
+  groupByVarDecl(std::move(first), std::move(last));
   for(auto& kvp : _grouped)
   {
-    Variable* myVar = kvp.first->hasLocalStorage() ? &self.find(kvp.first) : self.tryFindRecursive(kvp.first);
-    if(!myVar)
+    processVariable(kvp, self);
+  }
+}
+
+void spirv::VariablesStack::Merger::processVariable(Grouped::value_type& group,
+                                                    VariablesStack& self)
+{
+  Variable* myVar = group.first->hasLocalStorage() ? &self.find(group.first) : self.tryFindInStack(group.first);
+  if(!myVar)
+  {
+    // The dominating blocks never loaded this global variable.
+    // Emit stores in all blocks which loaded it so regardless what block the
+    // merge is reached from the next load gets the same value every time.
+    storeIfDirty(group.second);
+  }
+  else
+  {
+    auto modified = std::any_of(group.second.begin(), group.second.end(), [myVar] (const Var& var)
+                                {
+                                  return var.variable.value != myVar->value;
+                                });
+    if(!modified)
     {
-      // The dominating blocks never loaded this global variable.
+      // Case 1: Either the value was not modified, or it is volatile.
+      // Nothing to do here.
+    }
+    else if(myVar->value == spv::NoResult)
+    {
+      // Case 2: The dominating blocks never loaded this pointer parameter.
       // Emit stores in all blocks which loaded it so regardless what block the
       // merge is reached from the next load gets the same value every time.
-      storeIfDirty(kvp.second);
+      assert(myVar->decl->hasLocalStorage() && myVar->pointer != spv::NoResult && "not a local pointer?");
+      storeIfDirty(group.second);
     }
     else
     {
-      auto modified = std::any_of(kvp.second.begin(), kvp.second.end(), [myVar] (const Var& var)
-                                  {
-                                    return var.var.value != myVar->value;
-                                  });
-      if(!modified)
+      // Case 3: Some block modified the variable
+      // Collect all the participating values. If a block modified the variable
+      // inser the new value into OpPhi, for all the others take the value from
+      // the dominating block.
+      llvm::DenseSet<spv::Block*> writtenBlocks;
+      _operands.clear();
+      if(_reachableFromParent)
       {
-        // Case 1: The value was not modified, only read
-        continue;
+        _operands.push_back(myVar->value);
+        _operands.push_back(self.top().block->getId());
       }
-      else if(myVar->value == spv::NoResult)
+      for(auto& var : group.second)
       {
-        // Case 2: The dominating blocks never loaded this pointer parameter.
-        // Emit stores in all blocks which loaded it so regardless what block the
-        // merge is reached from the next load gets the same value every time.
-        storeIfDirty(kvp.second);
+        _operands.push_back(var.variable.value);
+        _operands.push_back(var.block->getId());
+        writtenBlocks.insert(var.block);
       }
-      else
+      for(auto b : _blocks)
       {
-        // Case 3: Some block modified the variable
-        llvm::DenseSet<spv::Block*> writtenBlocks;
-        _operands = {myVar->value, self._block->getId()};
-        for(auto& var : kvp.second)
+        if(writtenBlocks.find(b) == writtenBlocks.end())
         {
-          _operands.push_back(var.var.value);
-          _operands.push_back(var.vars->_block->getId());
-          writtenBlocks.insert(var.vars->_block);
+          _operands.push_back(myVar->value);
+          _operands.push_back(self.top().block->getId());
         }
-        for(auto b : _blocks)
-        {
-          if(writtenBlocks.find(b) == writtenBlocks.end())
-          {
-            _operands.push_back(myVar->value);
-            _operands.push_back(self._block->getId());
-          }
-        }
-        self.store({spv::NoResult, myVar->var, {}},
-                   self._builder.createOp(spv::OpPhi, self._types[myVar->var->getType()], _operands));
-        myVar->isDirty = myVar->isDirty || std::any_of(kvp.second.begin(), kvp.second.end(), [] (const Var& var)
-                                                       {
-                                                         return var.var.isDirty;
-                                                       });
       }
+      // TODO: if we're in a loop this becomes a rewrite candidate
+      self.store({spv::NoResult, myVar->decl, {}},
+                 self._builder.createOp(spv::OpPhi, self._types[myVar->decl->getType()], _operands));
+      // If any block thinks its value is dirty than we have to assume the worst case
+      myVar->isDirty = myVar->isDirty || std::any_of(group.second.begin(), group.second.end(), [] (const Var& var)
+                                                     {
+                                                       return var.variable.isDirty;
+                                                     });
     }
   }
 }
 
-void spirv::BlockVariables::Merger::storeIfDirty(std::vector<Var>& group)
+void spirv::VariablesStack::Merger::storeIfDirty(std::vector<Var>& group)
 {
   for(auto& var : group)
   {
-    var.vars->storeIfDirty(var.var);
+    VariablesStack::storeIfDirty(var.variable, var.block);
   }
 }
 
 template<class Iter>
-void spirv::BlockVariables::Merger::splitByVarDecl(Iter first, Iter last)
+void spirv::VariablesStack::Merger::groupByVarDecl(Iter first, Iter last)
 {
   // Separate all variables and process them in batches
   for(; first != last; ++first)
   {
-    _blocks.push_back(first->_block);
-    for(auto& var : first->_vars)
+    _blocks.push_back(first->block);
+    for(auto& var : first->vars)
     {
-      auto decl = var.var;
-      _grouped[decl].push_back({std::move(var), &*first});
+      auto decl = var.decl;
+      _grouped[decl].push_back({std::move(var), first->block});
     }
   }
   std::sort(_blocks.begin(), _blocks.end());
@@ -341,29 +363,25 @@ void spirv::BlockVariables::Merger::splitByVarDecl(Iter first, Iter last)
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-// BlockVariables
+// VariablesStack
 //
 
-spirv::BlockVariables::BlockVariables(TypeCache& types, BlockVariables* parent, spv::Block* block)
+spirv::VariablesStack::VariablesStack(TypeCache& types, spv::Builder& builder, spv::Block* block)
 : _types(types)
-, _builder(types.builder())
-, _parent(parent)
-, _block(block)
+, _builder(builder)
 {
+  push(block);
 }
 
-void spirv::BlockVariables::setBlock(spv::Block* block)
+Id spirv::VariablesStack::initUndefined(const VarDecl* decl)
 {
-  _block = block;
+  _initing = nullptr;
+  auto id = _builder.createUndefined(_types[decl->getType()]);
+  trackVariable(*decl, id);
+  return id;
 }
 
-void spirv::BlockVariables::markAsInitializing(const VarDecl& decl)
-{
-  assert(!_initing && "cannot initialize two variables at once");
-  _initing = &decl;
-}
-
-spv::Id spirv::BlockVariables::load(const VarDecl& decl)
+Id spirv::VariablesStack::load(const VarDecl& decl)
 {
   if(_initing == &decl)
   {
@@ -387,7 +405,7 @@ spv::Id spirv::BlockVariables::load(const VarDecl& decl)
   return var.value;
 }
 
-spv::Id spirv::BlockVariables::load(const ExprResult& expr)
+Id spirv::VariablesStack::load(const ExprResult& expr)
 {
   if(expr.variable)
   {
@@ -400,7 +418,7 @@ spv::Id spirv::BlockVariables::load(const ExprResult& expr)
   }
 }
 
-spirv::ExprResult spirv::BlockVariables::store(const ExprResult& target, spv::Id value)
+spirv::ExprResult spirv::VariablesStack::store(const ExprResult& target, Id value)
 {
   assert(value != spv::NoResult && "must have a real value");
   // TODO: composite access chains
@@ -413,7 +431,7 @@ spirv::ExprResult spirv::BlockVariables::store(const ExprResult& target, spv::Id
       trackVariable(*target.variable, value);
       return {value, target.variable, {}};
     }
-    
+
     if(target.value == value)
       return target; // This is a no-op
 
@@ -433,12 +451,18 @@ spirv::ExprResult spirv::BlockVariables::store(const ExprResult& target, spv::Id
   llvm_unreachable("assigning to temporary");
 //  else
 //  {
-//    // Somehow we manages to assign to a temporary?
+//    // Somehow we managed to assign to a temporary?
 //    return {value, nullptr, {}};
 //  }
 }
 
-void spirv::BlockVariables::storeIfDirty(Variable& var)
+void spirv::VariablesStack::storeIfDirty(Variable& var)
+{
+  assert(top().block && "must have a block set");
+  return storeIfDirty(var, top().block);
+}
+
+void spirv::VariablesStack::storeIfDirty(Variable& var, spv::Block* block)
 {
   if(var.pointer == spv::NoResult)
   {
@@ -446,26 +470,31 @@ void spirv::BlockVariables::storeIfDirty(Variable& var)
   }
   else if(var.isVolatile)
   {
-    return; // Already happened
+    return; // Never dirty
   }
   else if(var.isDirty)
   {
-    assert(_block && "must have an block set");
     auto inst = llvm::make_unique<spv::Instruction>(spv::OpStore);
     inst->addIdOperand(var.pointer);
     inst->addIdOperand(var.value);
-    _block->insertInstructionBeforeTerminal(inst.get());
+    block->insertInstructionBeforeTerminal(inst.get());
     inst.release();
     var.isDirty = false;
   }
 }
 
-void spirv::BlockVariables::trackVariable(const VarDecl& decl, spv::Id id)
+void spirv::VariablesStack::markAsInitializing(const VarDecl& decl)
+{
+  assert(!_initing && "cannot initialize two variables at once");
+  _initing = &decl;
+}
+
+void spirv::VariablesStack::trackVariable(const VarDecl& decl, Id id)
 {
   auto* ref = decl.getType()->getAs<ReferenceType>();
   auto isReference = ref != nullptr;
   auto storage = spv::StorageClassFunction; // TODO: derive storage class from variable attributes
-  _vars.push_back({
+  top().vars.push_back({
     &decl,
     isReference ? id : spv::NoResult,
     isReference ? spv::NoResult : id,
@@ -473,91 +502,95 @@ void spirv::BlockVariables::trackVariable(const VarDecl& decl, spv::Id id)
     isReference && ref->getPointeeType().isVolatileQualified(),
     false,
   });
-  sort();
+  sort(top());
 }
 
-spv::Id spirv::BlockVariables::initUndefined(const VarDecl* decl)
+void spirv::VariablesStack::setTopBlock(spv::Block* block)
 {
-  _initing = nullptr;
-  auto id = _builder.createUndefined(_types[decl->getType()]);
-  trackVariable(*decl, id);
-  return id;
+  top().block = block;
+}
+
+spirv::BlockVariables spirv::VariablesStack::popAndGet()
+{
+  auto result = std::move(top());
+  pop();
+  return result;
+}
+
+void spirv::VariablesStack::push(spv::Block* block)
+{
+  _stack.push_back({{}, block});
 }
 
 template<class Iter>
-void spirv::BlockVariables::mergeForward(Iter first, Iter last)
+void spirv::VariablesStack::merge(Iter first, Iter last, spv::Block* mergeBlock, bool reachableFromParent)
 {
-	Merger m(*this, std::move(first), std::move(last));
+  Merger m(*this, std::move(first), std::move(last), reachableFromParent);
 }
 
-spirv::Variable& spirv::BlockVariables::find(const VarDecl* decl)
+spirv::Variable& spirv::VariablesStack::find(const VarDecl* decl)
 {
   auto* var = tryFind(decl);
   if(var)
     return *var;
 
-  var = tryFindInParent(decl);
+  var = tryFindInStack(decl);
   if(var)
   {
-    _vars.push_back(*var);
-    sort();
+    top().vars.push_back(*var);
+    sort(top());
     return *tryFind(decl);
   }
   else
   {
-    assert(!decl->hasLocalStorage() && "local var must be tracked before used");
+    assert(!decl->hasLocalStorage() && "local var must be tracked before use");
     llvm_unreachable("global/static variables not yet implemented");
   }
 }
 
-spirv::Variable* spirv::BlockVariables::tryFind(const VarDecl* decl)
+spirv::Variable* spirv::VariablesStack::tryFind(const VarDecl* decl)
+{
+  return tryFind(decl, top());
+}
+
+spirv::Variable* spirv::VariablesStack::tryFind(const VarDecl* decl, BlockVariables& blockVars)
 {
   struct Comp
   {
-    bool operator()(const VarDecl* decl, const Variable& var) { return var.var < decl; }
-    bool operator()(const Variable& var, const VarDecl* decl) { return var.var < decl; }
+    bool operator()(const VarDecl* decl, const Variable& var) const { return var.decl < decl; }
+    bool operator()(const Variable& var, const VarDecl* decl) const { return var.decl < decl; }
   };
-  auto it = std::lower_bound(_vars.begin(), _vars.end(), decl, Comp{});
-  return it == _vars.end() ? nullptr : &*it;
+  auto it = std::lower_bound(blockVars.vars.begin(), blockVars.vars.end(), decl, Comp{});
+  return it == blockVars.vars.end() ? nullptr : (it->decl == decl ? &*it : nullptr);
 }
 
-spirv::Variable* spirv::BlockVariables::tryFindInParent(const VarDecl* decl)
+spirv::Variable* spirv::VariablesStack::tryFindInStack(const VarDecl* decl)
 {
-  if(!_parent)
-    return nullptr;
-
-  if(auto* var = _parent->tryFind(decl))
-    return var;
-  else
-    return _parent->tryFindInParent(decl);
+  // Ignore the top element since we need to distinguish between
+  // finding the element in the top or somewhere lower.
+  spirv::Variable* result = nullptr;
+  if(_stack.size() > 1)
+  {
+    std::find_if(++_stack.rbegin(), _stack.rend(), [decl, &result] (BlockVariables& blockVars)
+                 {
+                   result = tryFind(decl, blockVars);
+                   return result != nullptr;
+                 });
+  }
+  return result;
 }
 
-void spirv::BlockVariables::sort()
+void spirv::VariablesStack::sort(BlockVariables& blockVars)
 {
-  std::sort(_vars.begin(), _vars.end(), [] (const Variable& a, const Variable& b) { return a.var < b.var; });
-}
-
-spirv::Variable* spirv::BlockVariables::tryFindRecursive(const VarDecl* decl)
-{
-  auto var = tryFind(decl);
-  return var ? var : tryFindInParent(decl);
-}
-
-////////////////////////////////////////////////////////////////////////////////
-// VariablesStack
-//
-
-spirv::VariablesStack::VariablesStack(TypeCache& types)
-: _rootVars(types, nullptr)
-{
-  push(_rootVars);
+  std::sort(blockVars.vars.begin(), blockVars.vars.end(),
+            [] (const Variable& a, const Variable& b) { return a.decl < b.decl; });
 }
 
 ////////////////////////////////////////////////////////////////////////////////
 // StmtBuilder
 //
 
-spirv::StmtBuilder::StmtBuilder(TypeCache& types, BlockVariables& variables)
+spirv::StmtBuilder::StmtBuilder(TypeCache& types, VariablesStack& variables)
 : _types(types)
 , _builder(types.builder())
 , _vars(variables)
@@ -769,6 +802,12 @@ spirv::StmtBuilder::IncDecLiteral spirv::StmtBuilder::makeLiteralForIncDec(QualT
 {
   switch(type->getAs<BuiltinType>()->getKind())
   {
+    case BuiltinType::Short:
+      // TODO: int16
+      llvm_unreachable("int32 not yet implemented");
+    case BuiltinType::UShort:
+      // TODO: uint16
+      llvm_unreachable("uint32 not yet implemented");
     case BuiltinType::Int:
       return {_builder.makeIntConstant(1), false, true};
     case BuiltinType::UInt:
@@ -780,10 +819,10 @@ spirv::StmtBuilder::IncDecLiteral spirv::StmtBuilder::makeLiteralForIncDec(QualT
     case BuiltinType::ULong:
     case BuiltinType::ULongLong:
       // TODO: uint64
-      llvm_unreachable("int64 not yet implemented");
+      llvm_unreachable("uint64 not yet implemented");
     case BuiltinType::Half:
-      // TODO: half float
-      llvm_unreachable("half flot not yet implemented");
+      // TODO: float16
+      llvm_unreachable("float16 not yet implemented");
     case BuiltinType::Float:
       return {_builder.makeFloatConstant(1), true, false};
     case BuiltinType::Double:
@@ -815,23 +854,22 @@ bool spirv::FunctionBuilder::addParam(const ParmVarDecl& param)
 template<class F1, class F2>
 bool spirv::FunctionBuilder::buildIfStmt(F1 condDirector, F2 thenDirector)
 {
-  StmtBuilder condStmt{_types, _vars.top()};
+  StmtBuilder condStmt{_types, _vars};
   if(condDirector(condStmt))
   {
-    _vars.top().setBlock(_builder.getBuildPoint());
+    _vars.setTopBlock(_builder.getBuildPoint());
 
     spv::Builder::If ifBuilder{load(condStmt.expr()), _builder};
-    BlockVariables thenVars{_types, &_vars.top(), _builder.getBuildPoint()};
-    thenVars.setBlock(_builder.getBuildPoint());
-    _vars.push(thenVars);
+    _vars.push(_builder.getBuildPoint());
 
-    StmtBuilder thenStmt{_types, thenVars};
     if(thenDirector(*this))
     {
       ifBuilder.makeEndIf();
+      auto thenVars = _vars.popAndGet();
 
-      _vars.pop();
-      _vars.top().mergeForward(&thenVars, &thenVars + 1);
+      // TODO: merge
+      _vars.merge(&thenVars, &thenVars + 1, _builder.getBuildPoint(), true);
+      _vars.setTopBlock(_builder.getBuildPoint());
 
       return true;
     }
@@ -842,32 +880,30 @@ bool spirv::FunctionBuilder::buildIfStmt(F1 condDirector, F2 thenDirector)
 template<class F1, class F2, class F3>
 bool spirv::FunctionBuilder::buildIfStmt(F1 condDirector, F2 thenDirector, F3 elseDirector)
 {
-  StmtBuilder condStmt{_types, _vars.top()};
+  StmtBuilder condStmt{_types, _vars};
   if(condDirector(condStmt))
   {
-    _vars.top().setBlock(_builder.getBuildPoint());
+    _vars.setTopBlock(_builder.getBuildPoint());
 
     spv::Builder::If ifBuilder{load(condStmt.expr()), _builder};
 
-    llvm::SmallVector<BlockVariables, 2> vars;
-    vars.emplace_back(_types, &_vars.top(), _builder.getBuildPoint());
+    llvm::SmallVector<BlockVariables, 2> blockVars;
 
-    StmtBuilder thenStmt{_types, vars.back()};
-    _vars.push(vars.back());
+    _vars.push(_builder.getBuildPoint());
     if(thenDirector(*this))
     {
-      _vars.pop();
+      blockVars.push_back(_vars.popAndGet());
       ifBuilder.makeBeginElse();
 
-      vars.emplace_back(_types, &_vars.top(), _builder.getBuildPoint());
-      StmtBuilder thenStmt{_types, vars.back()};
-      _vars.push(vars.back());
+      _vars.push(_builder.getBuildPoint());
       if(elseDirector(*this))
       {
         ifBuilder.makeEndIf();
-        
-        _vars.pop();
-        _vars.top().mergeForward(vars.begin(), vars.end());
+        blockVars.push_back(_vars.popAndGet());
+
+        // TODO: merge
+        _vars.merge(blockVars.begin(), blockVars.end(), _builder.getBuildPoint(), false);
+        _vars.setTopBlock(_builder.getBuildPoint());
       }
       return true;
     }
@@ -878,10 +914,11 @@ bool spirv::FunctionBuilder::buildIfStmt(F1 condDirector, F2 thenDirector, F3 el
 template<class F>
 bool spirv::FunctionBuilder::buildReturnStmt(F exprDirector)
 {
-  StmtBuilder stmt{_types, _vars.top()};
+  StmtBuilder stmt{_types, _vars};
   if(exprDirector(stmt))
   {
     bool isVoid = _returnType == _builder.makeVoidType();
+    // TODO: flush dirty variables
     _builder.makeReturn(false, // Return stmts from the clang AST are never implicit
                         isVoid ? spv::NoResult : load(stmt.expr()),
                         false);
@@ -893,26 +930,26 @@ bool spirv::FunctionBuilder::buildReturnStmt(F exprDirector)
 template<class F>
 bool spirv::FunctionBuilder::buildStmt(F exprDirector)
 {
-  StmtBuilder stmt{_types, _vars.top()};
+  StmtBuilder stmt{_types, _vars};
   return exprDirector(stmt);
 }
 
 bool spirv::FunctionBuilder::declareUndefinedVar(const VarDecl& var)
 {
-  StmtBuilder stmt{_types, _vars.top()};
+  StmtBuilder stmt{_types, _vars};
   // Store the variable with an undefined value. We need this to have an operand
-  // for OpPhi for all blocks we dominate.
-  _vars.top().trackVariable(var, _builder.createUndefined(_types[var.getType()]));
+  // for OpPhi for all blocks dominated by the current one.
+  _vars.initUndefined(&var);
   return true;
 }
 
 template<class F>
 bool spirv::FunctionBuilder::declareVar(const VarDecl& var, F initDirector)
 {
-  StmtBuilder stmt{_types, _vars.top()};
-  // If the variable is loaded before being written to it produces an OpUndef value.
+  StmtBuilder stmt{_types, _vars};
+  // If the variable is loaded before being written it produces an OpUndef value.
   // TODO: references
-  _vars.top().markAsInitializing(var);
+  _vars.markAsInitializing(var);
   if(initDirector(stmt))
   {
     store({spv::NoResult, &var, {}}, load(stmt.expr()));
@@ -930,7 +967,7 @@ bool spirv::FunctionBuilder::pushScope(F scopeDirector)
     // This means we know the entire signature and can create the type.
     assert(_returnType != spv::NoType && "return type not yet set");
 
-    auto params = std::vector<spv::Id>{};
+    auto params = std::vector<Id>{};
     std::transform(_params.begin(), _params.end(),
                    std::back_inserter(params),
                    [this] (const ParmVarDecl* param)
@@ -954,11 +991,11 @@ bool spirv::FunctionBuilder::pushScope(F scopeDirector)
     std::string name = _mangler.mangleCxxDeclName(_decl);
     spv::Block* block;
     _function = _builder.makeFunctionEntry(_returnType, name.c_str(), params, &block);
-    _vars.top().setBlock(block);
+    _vars.setTopBlock(block);
     for(auto i = 0u; i < params.size(); ++i)
     {
       _builder.addName(_function->getParamId(i), _params[i]->getNameAsString().c_str());
-      _vars.top().trackVariable(*_params[i], _function->getParamId(i));
+      _vars.trackVariable(*_params[i], _function->getParamId(i));
     }
   }
   // We don't need any extra setup for a new scope, just continue the existing block.
@@ -973,7 +1010,7 @@ bool spirv::FunctionBuilder::setReturnType(QualType type)
   return true;
 }
 
-spv::Id spirv::FunctionBuilder::finalize()
+Id spirv::FunctionBuilder::finalize()
 {
   assert(_function && "there is no function");
   _builder.leaveFunction(false);
