@@ -105,7 +105,7 @@ std::string clang::lava::printCxxFunctionProto(FunctionDecl& decl)
   });
 }
 
-void clang::lava::printOperator(BinaryOperatorKind opcode, IndentWriter w)
+void clang::lava::printOperator(BinaryOperatorKind opcode, IndentWriter& w)
 {
   switch(opcode)
   {
@@ -145,7 +145,7 @@ void clang::lava::printOperator(BinaryOperatorKind opcode, IndentWriter w)
   }
 }
 
-void clang::lava::printOperator(UnaryOperatorKind opcode, IndentWriter w)
+void clang::lava::printOperator(UnaryOperatorKind opcode, IndentWriter& w)
 {
   switch(opcode)
   {

@@ -40,6 +40,10 @@ public:
   IndentWriter(llvm::raw_ostream& ostream, int indentSpaces = 2)
   : _indentSpaces(indentSpaces), _ostream(&ostream)
   { }
+  IndentWriter(const IndentWriter&) = delete;
+  IndentWriter(IndentWriter&&) = delete;
+  IndentWriter& operator=(const IndentWriter&) = delete;
+  IndentWriter& operator=(IndentWriter&&) = delete;
 
   void increase(int levels = 1) { _level += levels; }
   void decrease(int levels = 1) { _level = std::max(0, _level - levels); }

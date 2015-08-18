@@ -59,8 +59,8 @@ namespace clang
     std::string printCxxFunctionName(FunctionDecl& decl);
     std::string printCxxFunctionProto(FunctionDecl& decl);
 
-    void printOperator(BinaryOperatorKind opcode, IndentWriter w);
-    void printOperator(UnaryOperatorKind opcode, IndentWriter w);
+    void printOperator(BinaryOperatorKind opcode, IndentWriter& w);
+    void printOperator(UnaryOperatorKind opcode, IndentWriter& w);
     void printBoolLiteral(bool value, IndentWriter& w);
     void printFloatingLiteral(const FloatingLiteral& literal, PrintFloatingSuffix suffix, IndentWriter& w);
   }
