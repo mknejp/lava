@@ -6,7 +6,7 @@ It is in a very early state of development and more of an experiment (or proof-o
 ## Getting it
 First follow the installation instructions at http://clang.llvm.org/get_started.html, (although I suggest using their Git mirrors instead of SVN) **except** use http://github.com/mknejp/lava instead of the official Clang repository, but don't run CMake just yet. Make sure all repositories are set to branch `release_37` as that is what Lava is currently being developed against.
 
-Checkout http://github.com/KhronosGroup/glslang into the folder `llvm/tools/clang/utils/glslang`.
+Checkout http://github.com/mknejp/glslang into the folder `llvm/tools/clang/utils/glslang`.
 
 Switch the Lava repository to branch `lava`.
 
