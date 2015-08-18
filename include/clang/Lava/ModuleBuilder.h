@@ -279,7 +279,7 @@ public:
   /// Build an if statement without an else part.
   /// The condition must not declare a new variable as that is not supported by some target languages.
   /// \pram cond A statement director to build up the condition expression.
-  /// \pram then An unarry director to build up the content of the then-block.
+  /// \pram then An unary director to build up the content of the then-block.
   template<class F1, class F2>
   bool buildIfStmt(F1&& cond, F2&& then)
   {
@@ -290,7 +290,7 @@ public:
   /// Build an if statement with an else part.
   /// The condition must not declare a new variable as that is not supported by some target languages.
   /// \pram cond A statement director to build up the condition.
-  /// \pram then An unary director to build up the content of the then-block expression.
+  /// \pram then An unay director to build up the content of the then-block expression.
   /// \pram orElse An unary director to build up the content of the else-block.
   template<class F1, class F2, class F3>
   bool buildIfStmt(F1&& cond, F2&& then, F3&& orElse)
@@ -316,6 +316,17 @@ public:
   {
     auto f = StmtDirector{std::forward<F>(stmt)};
     return _success = _success && buildStmtImpl(f);
+  }
+  /// Build a while loop.
+  /// The condition must not declare a new variable as that is not supported by some target languages.
+  /// \pram cond A statement director to build up the condition expression.
+  /// \pram body An unary director to build up the content of the while body.
+  template<class F1, class F2>
+  bool buildWhileStmt(F1&& cond, F2&& body)
+  {
+    auto f1 = StmtDirector{std::forward<F1>(cond)};
+    auto f2 = Director{std::forward<F2>(body)};
+    return _success = _success && buildWhileStmtImpl(f1, f2);
   }
   /// Declare a single new local variable with no definition.
   bool declareUndefinedVar(const VarDecl& var)
@@ -363,6 +374,7 @@ private:
   virtual bool buildIfStmtImpl(StmtDirector& cond, Director& then, Director& orElse) = 0;
   virtual bool buildReturnStmtImpl(StmtDirector& expr) = 0;
   virtual bool buildStmtImpl(StmtDirector& director) = 0;
+  virtual bool buildWhileStmtImpl(StmtDirector& cond, Director& body) = 0;
   virtual bool declareUndefinedVarImpl(const VarDecl& var) = 0;
   virtual bool declareVarImpl(const VarDecl& var, StmtDirector& director) = 0;
   virtual bool pushScopeImpl(Director& director) = 0;
@@ -402,6 +414,11 @@ private:
   bool buildStmtImpl(StmtDirector& stmt) override
   {
     return _target.buildStmt(DirectorInvoker<T, StmtBuilder>{_target, stmt});
+  }
+  bool buildWhileStmtImpl(StmtDirector& cond, Director& body) override
+  {
+    return _target.buildWhileStmt(DirectorInvoker<T, StmtBuilder>{_target, cond},
+                                  DirectorInvoker<T, FunctionBuilder>{_target, body});
   }
   bool declareUndefinedVarImpl(const VarDecl& var) override
   {

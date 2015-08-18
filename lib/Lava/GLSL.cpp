@@ -375,6 +375,20 @@ bool glsl::FunctionBuilder::buildStmt(F stmtDirector)
   return false;
 }
 
+template<class F1, class F2>
+bool glsl::FunctionBuilder::buildWhileStmt(F1 condDirector, F2 bodyDirector)
+{
+  StmtBuilder condStmt{_typeNamePrinter, _w};
+  _w << "while(";
+  if(condDirector(condStmt))
+  {
+    _w << ')' << _w.endln();
+    return bodyDirector(*this);
+  }
+  return false;
+}
+
+
 bool glsl::FunctionBuilder::declareUndefinedVar(const VarDecl& var)
 {
   _typeNamePrinter.printTypeName(var.getType(), _w);

@@ -48,6 +48,7 @@ namespace
     void VisitDeclStmt(const DeclStmt* stmt);
     void VisitIfStmt(const IfStmt* stmt);
     void VisitReturnStmt(const ReturnStmt* stmt);
+    void VisitWhileStmt(const WhileStmt* stmt);
 
     // Declarations
     void VisitVarDecl(const VarDecl* decl);
@@ -56,6 +57,11 @@ namespace
     void VisitExpr(const Expr* expr);
 
   private:
+    template<class F>
+    void buildStmtWithPossibleConditionVariable(VarDecl* conditionVariable,
+                                                const DeclStmt* conditionVariableDeclStmt,
+                                                F build);
+    
     FunctionBuilder& _builder;
   };
 
@@ -160,21 +166,9 @@ void FunctionVisitor::VisitIfStmt(const IfStmt* stmt)
     }
   };
 
-  if(stmt->getConditionVariable())
-  {
-    // If the condition declares a variable open a new scope to ensure its name
-    // doesn't clash with a variable that is already declared and makes it go
-    // out of scope immediately following the if/then/else stmt.
-    _builder.pushScope([&] (FunctionBuilder& builder)
-    {
-      FunctionVisitor{builder}.VisitDeclStmt(stmt->getConditionVariableDeclStmt());
-      build(builder);
-    });
-  }
-  else
-  {
-    build(_builder);
-  }
+  buildStmtWithPossibleConditionVariable(stmt->getConditionVariable(),
+                                         stmt->getConditionVariableDeclStmt(),
+                                         build);
 }
 
 void FunctionVisitor::VisitReturnStmt(const ReturnStmt* stmt)
@@ -188,6 +182,43 @@ void FunctionVisitor::VisitReturnStmt(const ReturnStmt* stmt)
     }
   });
 }
+
+void FunctionVisitor::VisitWhileStmt(const WhileStmt* stmt)
+{
+  auto build = [stmt] (FunctionBuilder& builder)
+  {
+    builder.buildWhileStmt([stmt] (StmtBuilder& builder) { ExprVisitor{builder}.Visit(stmt->getCond()); },
+                           makeBlockBuilder(stmt->getBody()));
+  };
+
+  buildStmtWithPossibleConditionVariable(stmt->getConditionVariable(),
+                                         stmt->getConditionVariableDeclStmt(),
+                                         build);
+}
+
+template<class F>
+void FunctionVisitor::buildStmtWithPossibleConditionVariable(VarDecl* conditionVariable,
+                                                             const DeclStmt* conditionVariableDeclStmt,
+                                                             F build)
+{
+  if(conditionVariable)
+  {
+    // If the condition declares a variable open a new scope to ensure its name
+    // doesn't clash with a variable that is already declared and makes it go
+    // out of scope immediately following the while stmt.
+    _builder.pushScope([&] (FunctionBuilder& builder)
+                       {
+                         FunctionVisitor{builder}.VisitDeclStmt(conditionVariableDeclStmt);
+                         build(builder);
+                       });
+    // TODO: run destructors
+  }
+  else
+  {
+    build(_builder);
+  }
+}
+
 
 void FunctionVisitor::VisitVarDecl(const VarDecl* decl)
 {

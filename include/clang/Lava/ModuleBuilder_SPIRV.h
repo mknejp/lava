@@ -180,7 +180,10 @@ public:
   void setTopBlock(spv::Block* block);
   void trackVariable(const VarDecl& decl, Id id);
 
-  void push(spv::Block* block);
+  // Extract all variables from the top and mark the remaining object as invalid
+  // thus making it not participate in merges.
+  auto extractTop() -> BlockVariables;
+  void push(spv::Block* block, LoopMergeContext* loop);
   void pop() { _stack.pop_back(); }
   auto popAndGet() -> BlockVariables;
 
@@ -195,7 +198,6 @@ public:
   void merge(Iter first, Iter last, spv::Block* mergeBlock, LoopMergeContext* loop = nullptr);
 
 private:
-  static Variable* tryFind(const VarDecl* decl, BlockVariables& blockVars);
   static void sort(BlockVariables& blockVars);
   static void storeIfDirty(Variable& var, spv::Block* block);
 
@@ -346,6 +348,8 @@ public:
   bool buildReturnStmt(F exprDirector);
   template<class F>
   bool buildStmt(F exprDirector);
+  template<class F1, class F2>
+  bool buildWhileStmt(F1 condDirector, F2 bodyDirector);
   bool declareUndefinedVar(const VarDecl& var);
   template<class F>
   bool declareVar(const VarDecl& var, F initDirector);

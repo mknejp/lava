@@ -588,6 +588,14 @@ void spirv::VariablesStack::setTopBlock(spv::Block* block)
   top().block = block;
 }
 
+spirv::BlockVariables spirv::VariablesStack::extractTop()
+{
+  auto temp = std::move(top());
+  top().block = nullptr;
+  top().loop = nullptr;
+  return temp;
+}
+
 spirv::BlockVariables spirv::VariablesStack::popAndGet()
 {
   auto result = std::move(top());
@@ -1492,6 +1500,39 @@ bool spirv::FunctionBuilder::buildStmt(F exprDirector)
 {
   StmtBuilder stmt{_types, _vars};
   return exprDirector(stmt);
+}
+
+template<class F1, class F2>
+bool spirv::FunctionBuilder::buildWhileStmt(F1 condDirector, F2 bodyDirector)
+{
+  _vars.setTopBlock(_builder.getBuildPoint());
+
+  StmtBuilder condStmt{_types, _vars};
+  LoopMergeContext loop{_builder, _loops.top()};
+  LoopStack::ScopedPush push{_loops, &loop};
+
+  _builder.makeNewLoop(true);
+  auto* testBlock = _builder.getBuildPoint();
+  _vars.push(testBlock, &loop);
+  if(condDirector(condStmt))
+  {
+    _builder.createLoopTestBranch(load(condStmt.expr()));
+    auto* bodyBlock = _builder.getBuildPoint();
+    _vars.push(bodyBlock, &loop);
+    if(bodyDirector(*this))
+    {
+      _builder.closeLoop();
+      auto mergeBlock = _builder.getBuildPoint();
+      loop.addContinueBlock(_vars.popAndGet());
+      loop.setHeaderBlock(_vars.popAndGet());
+      loop.mergeContinueBlocks(_vars, testBlock);
+      loop.mergeBreakBlocks(_vars, mergeBlock);
+      loop.applyRewrites();
+      _vars.setTopBlock(mergeBlock);
+      return true;
+    }
+  }
+  return false;
 }
 
 bool spirv::FunctionBuilder::declareUndefinedVar(const VarDecl& var)

@@ -119,6 +119,8 @@ public:
   bool buildReturnStmt(F exprDirector);
   template<class F>
   bool buildStmt(F exprDirector);
+  template<class F1, class F2>
+  bool buildWhileStmt(F1 condDirector, F2 bodyDirector);
   bool declareUndefinedVar(const VarDecl& var);
   template<class F>
   bool declareVar(const VarDecl& var, F initDirector);
