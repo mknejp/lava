@@ -229,6 +229,25 @@ Id spirv::RecordBuilder::finalize()
 }
 
 ////////////////////////////////////////////////////////////////////////////////
+// BlockVariables
+//
+
+namespace
+{
+  spirv::Variable* tryFind(const VarDecl* decl, spirv::BlockVariables& blockVars)
+  {
+    using namespace spirv;
+    struct Comp
+    {
+      bool operator()(const VarDecl* decl, const Variable& var) const { return var.decl < decl; }
+      bool operator()(const Variable& var, const VarDecl* decl) const { return var.decl < decl; }
+    };
+    auto it = std::lower_bound(blockVars.vars.begin(), blockVars.vars.end(), decl, Comp{});
+    return it == blockVars.vars.end() ? nullptr : (it->decl == decl ? &*it : nullptr);
+  }
+}
+
+////////////////////////////////////////////////////////////////////////////////
 // VariablesStack::Merger
 //
 
@@ -236,7 +255,7 @@ class spirv::VariablesStack::Merger
 {
 public:
   template<class Iter>
-  Merger(VariablesStack& self, Iter first, Iter last);
+  Merger(VariablesStack& self, Iter first, Iter last, spv::Block* mergeBlock, LoopMergeContext* loop);
 
 private:
   struct Var
@@ -246,37 +265,44 @@ private:
   };
   using Grouped = std::map<const VarDecl*, std::vector<Var>>;
 
-  void processVariable(Grouped::value_type& kvp, VariablesStack& self);
+  void processVariable(Grouped::value_type& kvp, VariablesStack& self, LoopMergeContext* loop);
   template<class Iter>
   void groupByVarDecl(Iter first, Iter last);
   void storeIfDirty(std::vector<Var>& group);
 
   Grouped _grouped;
   llvm::SmallVector<spv::Block*, 8> _blocks;
-  std::vector<unsigned> _operands;
   spv::Block* const _mergeBlock;
 };
 
 template<class Iter>
-spirv::VariablesStack::Merger::Merger(VariablesStack& self, Iter first, Iter last)
-: _mergeBlock(self._builder.getBuildPoint())
+spirv::VariablesStack::Merger::Merger(VariablesStack& self, Iter first, Iter last,
+                                      spv::Block* mergeBlock, LoopMergeContext* loop)
+: _mergeBlock(mergeBlock)
 {
   groupByVarDecl(std::move(first), std::move(last));
   for(auto& kvp : _grouped)
   {
-    processVariable(kvp, self);
+    processVariable(kvp, self, loop);
   }
 }
 
 void spirv::VariablesStack::Merger::processVariable(Grouped::value_type& group,
-                                                    VariablesStack& self)
+                                                    VariablesStack& self,
+                                                    LoopMergeContext* loop)
 {
-  Variable* myVar = group.first->hasLocalStorage() ? &self.find(group.first) : self.tryFindInStack(group.first);
+  Variable* myVar = group.first->hasLocalStorage() ? &self.find(group.first) : self.tryFind(group.first);
   if(!myVar)
   {
     // The dominating blocks never loaded this global variable.
     // Emit stores in all blocks which loaded it so regardless what block the
     // merge is reached from the next load gets the same value every time.
+    // There is no need for a loop rewrite as the variable was not present when
+    // the loop started.
+
+    // TODO: if the domiating block is not a predecessor of the merge then
+    // alternatively we might balance out load/stores according to load/store
+    // ratios in the branches.
     storeIfDirty(group.second);
   }
   else
@@ -295,6 +321,12 @@ void spirv::VariablesStack::Merger::processVariable(Grouped::value_type& group,
       // Case 2: The dominating blocks never loaded this pointer parameter.
       // Emit stores in all blocks which loaded it so regardless what block the
       // merge is reached from the next load gets the same value every time.
+      // There is no need for a loop rewrite as the variable was not present
+      // when the loop started.
+
+      // TODO: if the domiating block is not a predecessor of the merge then
+      // alternatively we might balance out load/stores according to load/store
+      // ratios in the branches.
       assert(myVar->decl->hasLocalStorage() && myVar->pointer != spv::NoResult && "not a local pointer?");
       storeIfDirty(group.second);
     }
@@ -302,32 +334,68 @@ void spirv::VariablesStack::Merger::processVariable(Grouped::value_type& group,
     {
       // Case 3: Some block modified the variable
       // Collect all the participating values. If a block modified the variable
-      // inser the new value into OpPhi, for all the others take the value from
+      // insert the new value into OpPhi, for all the others take the value from
       // the dominating block.
       llvm::DenseSet<spv::Block*> writtenBlocks;
-      _operands.clear();
+      auto addLoopRewriteCandidate = [loop, &self, &group, this] (Id value)
+      {
+        // If we are merging the loop header, then some blocks may have only
+        // read the value but not modified it. In that case we have to rewrite
+        // the OpPhi itself and make it use its own result from those branches.
+        if(loop)
+        {
+          loop->addRewriteCandidate(group.first, value, _mergeBlock);
+          if(loop->parent())
+          {
+            // If we are in a nested loop then the OpPhi instruction may be a
+            // rewrite candidate in the parent loop for the case where we enter
+            // from the pre-header.
+            if(loop->parent())
+            {
+              loop->parent()->addRewriteCandidate(group.first, value, _mergeBlock);
+            }
+          }
+        }
+      };
+      // Have to build the instructions manually since we insert it at the front
+      auto inst = llvm::make_unique<spv::Instruction>(self._builder.getUniqueId(),
+                                                      self._types[myVar->decl->getType()],
+                                                      spv::OpPhi);
       if(_mergeBlock->hasPredecessor(self.top().block))
       {
-        _operands.push_back(myVar->value);
-        _operands.push_back(self.top().block->getId());
+        addLoopRewriteCandidate(myVar->value);
+        inst->addIdOperand(myVar->value);
+        inst->addIdOperand(self.top().block->getId());
       }
       for(auto& var : group.second)
       {
-        _operands.push_back(var.variable.value);
-        _operands.push_back(var.block->getId());
+        addLoopRewriteCandidate(var.variable.value);
+        inst->addIdOperand(var.variable.value);
+        inst->addIdOperand(var.block->getId());
         writtenBlocks.insert(var.block);
       }
       for(auto b : _blocks)
       {
         if(writtenBlocks.find(b) == writtenBlocks.end())
         {
-          _operands.push_back(myVar->value);
-          _operands.push_back(self.top().block->getId());
+          addLoopRewriteCandidate(myVar->value);
+          inst->addIdOperand(myVar->value);
+          inst->addIdOperand(b->getId());
         }
       }
-      // TODO: if we're in a loop this becomes a rewrite candidate
-      self.store({spv::NoResult, myVar->decl, {}},
-                 self._builder.createOp(spv::OpPhi, self._types[myVar->decl->getType()], _operands));
+      _mergeBlock->addInstructionAtFront(inst.get());
+      if(loop)
+      {
+        // The result of this OpPhi is re-used in the loop and gives us the <id>
+        // for rewriting all the other consuming instructions.
+        loop->setRewriteId(myVar->decl, inst->getResultId());
+      }
+      else
+      {
+        // The OpPhi gives the new value to be used for the following code.
+        self.store({spv::NoResult, myVar->decl, {}}, inst->getResultId());
+      }
+      inst.release();
       // If any block thinks its value is dirty than we have to assume the worst case
       myVar->isDirty = myVar->isDirty || std::any_of(group.second.begin(), group.second.end(), [] (const Var& var)
                                                      {
@@ -352,14 +420,15 @@ void spirv::VariablesStack::Merger::groupByVarDecl(Iter first, Iter last)
   for(; first != last; ++first)
   {
     // If this block doesn't directly branch to the merge block it's a break or
-    // continue block in a loop/selection merge block and deoesn't contribute.
+    // continue block in a loop/selection merge block and deoesn't contribute
+    // to the merge of an if/then/else or switch.
     if(_mergeBlock->hasPredecessor(first->block))
     {
       _blocks.push_back(first->block);
       for(auto& var : first->vars)
       {
         auto decl = var.decl;
-        _grouped[decl].push_back({std::move(var), first->block});
+        _grouped[decl].push_back({var, first->block});
       }
     }
   }
@@ -375,7 +444,7 @@ spirv::VariablesStack::VariablesStack(TypeCache& types, spv::Builder& builder, s
 : _types(types)
 , _builder(builder)
 {
-  push(block);
+  push(block, nullptr);
 }
 
 Id spirv::VariablesStack::initUndefined(const VarDecl* decl)
@@ -406,6 +475,10 @@ Id spirv::VariablesStack::load(const VarDecl& decl)
     {
       var.value = id;
     }
+  }
+  else if(top().loop)
+  {
+    top().loop->addRewriteCandidate(&decl, var.value, top().block);
   }
   return var.value;
 }
@@ -522,29 +595,29 @@ spirv::BlockVariables spirv::VariablesStack::popAndGet()
   return result;
 }
 
-void spirv::VariablesStack::push(spv::Block* block)
+void spirv::VariablesStack::push(spv::Block* block, LoopMergeContext* loop)
 {
-  _stack.push_back({{}, block});
+  _stack.push_back({{}, block, loop});
 }
 
 template<class Iter>
-void spirv::VariablesStack::merge(Iter first, Iter last, spv::Block* mergeBlock, bool reachableFromParent)
+void spirv::VariablesStack::merge(Iter first, Iter last, spv::Block* mergeBlock, LoopMergeContext* loop)
 {
-  Merger m(*this, std::move(first), std::move(last), reachableFromParent);
+  Merger m(*this, std::move(first), std::move(last), mergeBlock, loop);
 }
 
 spirv::Variable& spirv::VariablesStack::find(const VarDecl* decl)
 {
-  auto* var = tryFind(decl);
+  auto* var = tryFindInTop(decl);
   if(var)
     return *var;
 
-  var = tryFindInStack(decl);
+  var = tryFindInStackBelowTop(decl);
   if(var)
   {
     top().vars.push_back(*var);
     sort(top());
-    return *tryFind(decl);
+    return *tryFindInTop(decl);
   }
   else
   {
@@ -553,23 +626,12 @@ spirv::Variable& spirv::VariablesStack::find(const VarDecl* decl)
   }
 }
 
-spirv::Variable* spirv::VariablesStack::tryFind(const VarDecl* decl)
+spirv::Variable* spirv::VariablesStack::tryFindInTop(const VarDecl* decl)
 {
-  return tryFind(decl, top());
+  return ::tryFind(decl, top());
 }
 
-spirv::Variable* spirv::VariablesStack::tryFind(const VarDecl* decl, BlockVariables& blockVars)
-{
-  struct Comp
-  {
-    bool operator()(const VarDecl* decl, const Variable& var) const { return var.decl < decl; }
-    bool operator()(const Variable& var, const VarDecl* decl) const { return var.decl < decl; }
-  };
-  auto it = std::lower_bound(blockVars.vars.begin(), blockVars.vars.end(), decl, Comp{});
-  return it == blockVars.vars.end() ? nullptr : (it->decl == decl ? &*it : nullptr);
-}
-
-spirv::Variable* spirv::VariablesStack::tryFindInStack(const VarDecl* decl)
+spirv::Variable* spirv::VariablesStack::tryFindInStackBelowTop(const VarDecl* decl)
 {
   // Ignore the top element since we need to distinguish between
   // finding the element in the top or somewhere lower.
@@ -578,11 +640,17 @@ spirv::Variable* spirv::VariablesStack::tryFindInStack(const VarDecl* decl)
   {
     std::find_if(++_stack.rbegin(), _stack.rend(), [decl, &result] (BlockVariables& blockVars)
                  {
-                   result = tryFind(decl, blockVars);
+                   result = ::tryFind(decl, blockVars);
                    return result != nullptr;
                  });
   }
   return result;
+}
+
+spirv::Variable* spirv::VariablesStack::tryFind(const VarDecl* decl)
+{
+  auto* var = tryFindInTop(decl);
+  return var ? var : tryFindInStackBelowTop(decl);
 }
 
 void spirv::VariablesStack::sort(BlockVariables& blockVars)
@@ -590,6 +658,494 @@ void spirv::VariablesStack::sort(BlockVariables& blockVars)
   std::sort(blockVars.vars.begin(), blockVars.vars.end(),
             [] (const Variable& a, const Variable& b) { return a.decl < b.decl; });
 }
+
+////////////////////////////////////////////////////////////////////////////////
+// LoopMergeContext
+//
+
+spirv::LoopMergeContext::LoopMergeContext(spv::Builder& builder, LoopMergeContext* parent)
+: _builder(builder)
+, _parent(parent)
+, _preheader(builder.getBuildPoint())
+{
+}
+
+void spirv::LoopMergeContext::addBreakBlock(BlockVariables block)
+{
+  _breakBlocks.push_back(std::move(block));
+}
+
+void spirv::LoopMergeContext::addContinueBlock(BlockVariables block)
+{
+  _continueBlocks.push_back(std::move(block));
+}
+
+void spirv::LoopMergeContext::setHeaderBlock(BlockVariables block)
+{
+  _headerBlock = std::move(block);
+}
+
+void spirv::LoopMergeContext::addRewriteCandidate(const VarDecl* decl, Id operand, spv::Block* block)
+{
+  VarInfo* entry = tryFind(decl);
+  if(entry)
+  {
+    // We already know about this variable. We are only interested in rewriting
+    // the block's instructions if it reads the Result<id> under which the
+    // variable is introduced into the loop. Otherwise it reads a transitive
+    // value and is therefore not affected.
+    if(entry->tentativeId == operand)
+    {
+      if(!std::binary_search(entry->blocks.begin(), entry->blocks.end(), block))
+      {
+        entry->blocks.push_back(block);
+        std::sort(entry->blocks.begin(), entry->blocks.end());
+      }
+    }
+  }
+  else
+  {
+    // This is a new variable. Remember the block containing the consuming
+    // instruction so it can be rewritten if required.
+    _rewriteCandidates.push_back({decl, {block}, operand, spv::NoResult});
+    sort();
+  }
+}
+
+void spirv::LoopMergeContext::setRewriteId(const VarDecl* decl, Id rewriteId)
+{
+  VarInfo* entry = tryFind(decl);
+  if(entry)
+  {
+    assert(entry->rewriteId == spv::NoResult && "rewriting same valurable twice");
+    entry->rewriteId = rewriteId;
+    // When merging the loop header only remember this new value for
+    // this variable if the input to it was the same as what was active
+    // until after the header block. This ensures that merging the break
+    // blocks actually uses this new result if the header only read its value.
+    if(auto* mergeVar = ::tryFind(decl, _headerBlock))
+    {
+      if(mergeVar->value == entry->tentativeId)
+      {
+        mergeVar->value = rewriteId;
+      }
+    }
+  }
+}
+
+void spirv::LoopMergeContext::applyRewrites()
+{
+  for(auto& rewrite : _rewriteCandidates)
+  {
+    if(rewrite.rewriteId != spv::NoResult)
+    {
+      for(auto* block : rewrite.blocks)
+      {
+        std::for_each(block->begin(), block->end(), [&rewrite, this] (spv::Instruction* inst)
+                      {
+                        rewriteInstruction(inst, rewrite.tentativeId, rewrite.rewriteId);
+                      });
+      }
+    }
+  }
+}
+
+void spirv::LoopMergeContext::rewriteInstruction(spv::Instruction* inst, Id oldId, Id rewriteId)
+{
+  auto rewrite = [inst, oldId, rewriteId] (std::initializer_list<unsigned int> indices)
+  {
+    for(auto i : indices)
+    {
+      inst->rewriteOperand(oldId, rewriteId, i);
+    }
+  };
+  auto rewriteAll = [inst, oldId, rewriteId]
+  {
+    inst->rewriteOperands(oldId, rewriteId);
+  };
+  // We are only interested in rewriting operations with <id> of other values.
+  // List all enumerants explicitly so we get a warning if new ones appear.
+  switch(inst->getOpCode())
+  {
+    // These opcodes have no operand <id>s or are not used inside functions
+    case spv::OpNop:
+    case spv::OpUndef:
+    case spv::OpSource:
+    case spv::OpSourceExtension:
+    case spv::OpName:
+    case spv::OpMemberName:
+    case spv::OpString:
+    case spv::OpLine:
+    case spv::OpDecorate:
+    case spv::OpMemberDecorate:
+    case spv::OpDecorationGroup:
+    case spv::OpGroupDecorate:
+    case spv::OpGroupMemberDecorate:
+    case spv::OpExtension:
+    case spv::OpExtInstImport:
+    case spv::OpExtInst:
+    case spv::OpMemoryModel:
+    case spv::OpEntryPoint:
+    case spv::OpExecutionMode:
+    case spv::OpCapability:
+    case spv::OpTypeVoid:
+    case spv::OpTypeBool:
+    case spv::OpTypeInt:
+    case spv::OpTypeFloat:
+    case spv::OpTypeVector:
+    case spv::OpTypeMatrix:
+    case spv::OpTypeImage:
+    case spv::OpTypeSampler:
+    case spv::OpTypeSampledImage:
+    case spv::OpTypeArray:
+    case spv::OpTypeRuntimeArray:
+    case spv::OpTypeStruct:
+    case spv::OpTypeOpaque:
+    case spv::OpTypePointer:
+    case spv::OpTypeFunction:
+    case spv::OpTypeEvent:
+    case spv::OpTypeDeviceEvent:
+    case spv::OpTypeReserveId:
+    case spv::OpTypeQueue:
+    case spv::OpTypePipe:
+    case spv::OpConstantTrue:
+    case spv::OpConstantFalse:
+    case spv::OpConstant:
+    case spv::OpConstantComposite:
+    case spv::OpConstantSampler:
+    case spv::OpConstantNull:
+    case spv::OpSpecConstantTrue:
+    case spv::OpSpecConstantFalse:
+    case spv::OpSpecConstant:
+    case spv::OpSpecConstantComposite:
+    case spv::OpSpecConstantOp:
+    case spv::OpVariable:
+    case spv::OpFunction:
+    case spv::OpFunctionParameter:
+    case spv::OpFunctionEnd:
+      return;
+
+    // These are used in functions but their operands aren't value <id>s
+    // or constants/literals only
+    case spv::OpSelectionMerge:
+    case spv::OpLoopMerge:
+    case spv::OpLabel:
+    case spv::OpBranch:
+    case spv::OpKill:
+    case spv::OpReturn:
+    case spv::OpUnreachable:
+    case spv::OpEmitVertex:
+    case spv::OpEndPrimitive:
+    case spv::OpEmitStreamVertex:
+    case spv::OpEndStreamPrimitive:
+    case spv::OpControlBarrier:
+    case spv::OpMemoryBarrier:
+      return;
+
+    // OpPhi is a special case because we must not rewrite the value that is
+    // inserted from the loop's pre-header block.
+    case spv::OpPhi:
+      assert((inst->getNumOperands() % 2) == 0 && "OpPhi must have even operand count");
+      for(auto i = 0; i < inst->getNumOperands(); i += 2)
+      {
+        if(inst->getIdOperand(i + 1) != _preheader->getId())
+        {
+          inst->rewriteOperand(oldId, rewriteId, i);
+        }
+      }
+      return;
+
+    // These are single-operand instructions where the <id> may be followed by
+    // non-<id> values.
+    case spv::OpLoad:
+    case spv::OpAccessChain:
+    case spv::OpInBoundsAccessChain:
+    case spv::OpArrayLength:
+    case spv::OpCompositeExtract:
+    case spv::OpBranchConditional:
+    case spv::OpSwitch:
+    case spv::OpLifetimeStart:
+    case spv::OpLifetimeStop:
+    case spv::OpAtomicLoad:
+    case spv::OpAtomicStore:
+    case spv::OpAtomicIIncrement:
+    case spv::OpAtomicIDecrement:
+      rewrite({0});
+      return;
+
+    // These are dual-operand instructions where the <id>s may be followed by
+    // non-<id> values.
+    case spv::OpStore:
+    case spv::OpCopyMemory:
+    case spv::OpSampledImage:
+    case spv::OpImageSampleImplicitLod:
+    case spv::OpImageSampleExplicitLod:
+    case spv::OpImageSampleProjImplicitLod:
+    case spv::OpImageSampleProjExplicitLod:
+    case spv::OpImageFetch:
+    case spv::OpVectorShuffle:
+    case spv::OpCompositeInsert:
+      rewrite({0, 1});
+      return;
+
+    // These are triple-operand instructions where the <id>s may be followed by
+    // non-<id> values.
+    case spv::OpImageTexelPointer:
+    case spv::OpImageSampleDrefImplicitLod:
+    case spv::OpImageSampleDrefExplicitLod:
+    case spv::OpImageSampleProjDrefImplicitLod:
+    case spv::OpImageSampleProjDrefExplicitLod:
+    case spv::OpImageGather:
+    case spv::OpImageDrefGather:
+      rewrite({0, 1, 2});
+      return;
+
+    // Atomic instructions have their own format
+    case spv::OpAtomicExchange:
+    case spv::OpAtomicIAdd:
+    case spv::OpAtomicISub:
+    case spv::OpAtomicSMin:
+    case spv::OpAtomicUMin:
+    case spv::OpAtomicSMax:
+    case spv::OpAtomicUMax:
+    case spv::OpAtomicAnd:
+    case spv::OpAtomicOr:
+    case spv::OpAtomicXor:
+      rewrite({0, 3});
+      return;
+
+    case spv::OpAtomicCompareExchange:
+      rewrite({0, 4, 5});
+      return;
+
+    // Thse have only <id> operands
+    case spv::OpFunctionCall:
+    case spv::OpImageRead:
+    case spv::OpImageWrite:
+    case spv::OpImageQuerySizeLod:
+    case spv::OpImageQuerySize:
+    case spv::OpImageQueryLod:
+    case spv::OpImageQueryLevels:
+    case spv::OpImageQuerySamples:
+    case spv::OpConvertFToU:
+    case spv::OpConvertFToS:
+    case spv::OpConvertSToF:
+    case spv::OpConvertUToF:
+    case spv::OpUConvert:
+    case spv::OpSConvert:
+    case spv::OpFConvert:
+    case spv::OpQuantizeToF16:
+    case spv::OpBitcast:
+    case spv::OpVectorExtractDynamic:
+    case spv::OpVectorInsertDynamic:
+    case spv::OpCompositeConstruct:
+    case spv::OpCopyObject:
+    case spv::OpTranspose:
+    case spv::OpSNegate:
+    case spv::OpFNegate:
+    case spv::OpIAdd:
+    case spv::OpFAdd:
+    case spv::OpISub:
+    case spv::OpFSub:
+    case spv::OpIMul:
+    case spv::OpFMul:
+    case spv::OpUDiv:
+    case spv::OpSDiv:
+    case spv::OpFDiv:
+    case spv::OpUMod:
+    case spv::OpSRem:
+    case spv::OpSMod:
+    case spv::OpFRem:
+    case spv::OpFMod:
+    case spv::OpVectorTimesScalar:
+    case spv::OpMatrixTimesScalar:
+    case spv::OpVectorTimesMatrix:
+    case spv::OpMatrixTimesVector:
+    case spv::OpMatrixTimesMatrix:
+    case spv::OpOuterProduct:
+    case spv::OpDot:
+    case spv::OpShiftRightLogical:
+    case spv::OpShiftRightArithmetic:
+    case spv::OpShiftLeftLogical:
+    case spv::OpBitwiseOr:
+    case spv::OpBitwiseXor:
+    case spv::OpBitwiseAnd:
+    case spv::OpNot:
+    case spv::OpBitFieldInsert:
+    case spv::OpBitFieldSExtract:
+    case spv::OpBitFieldUExtract:
+    case spv::OpBitReverse:
+    case spv::OpBitCount:
+    case spv::OpAny:
+    case spv::OpAll:
+    case spv::OpIsNan:
+    case spv::OpIsInf:
+    case spv::OpLogicalEqual:
+    case spv::OpLogicalNotEqual:
+    case spv::OpLogicalOr:
+    case spv::OpLogicalAnd:
+    case spv::OpLogicalNot:
+    case spv::OpSelect:
+    case spv::OpIEqual:
+    case spv::OpINotEqual:
+    case spv::OpUGreaterThan:
+    case spv::OpSGreaterThan:
+    case spv::OpUGreaterThanEqual:
+    case spv::OpSGreaterThanEqual:
+    case spv::OpULessThan:
+    case spv::OpSLessThan:
+    case spv::OpULessThanEqual:
+    case spv::OpSLessThanEqual:
+    case spv::OpFOrdEqual:
+    case spv::OpFUnordEqual:
+    case spv::OpFOrdNotEqual:
+    case spv::OpFUnordNotEqual:
+    case spv::OpFOrdLessThan:
+    case spv::OpFUnordLessThan:
+    case spv::OpFOrdGreaterThan:
+    case spv::OpFUnordGreaterThan:
+    case spv::OpFOrdLessThanEqual:
+    case spv::OpFUnordLessThanEqual:
+    case spv::OpFOrdGreaterThanEqual:
+    case spv::OpFUnordGreaterThanEqual:
+    case spv::OpDPdx:
+    case spv::OpDPdy:
+    case spv::OpFwidth:
+    case spv::OpDPdxFine:
+    case spv::OpDPdyFine:
+    case spv::OpFwidthFine:
+    case spv::OpDPdxCoarse:
+    case spv::OpDPdyCoarse:
+    case spv::OpFwidthCoarse:
+    case spv::OpReturnValue:
+      rewriteAll();
+      return;
+
+    case spv::OpConvertPtrToU:
+    case spv::OpConvertUToPtr:
+    case spv::OpCopyMemorySized:
+    case spv::OpPtrAccessChain:
+      llvm_unreachable("Address capability ops not supported");
+
+    case spv::OpGenericPtrMemSemantics:
+    case spv::OpImageQueryDim:
+    case spv::OpImageQueryFormat:
+    case spv::OpImageQueryOrder:
+    case spv::OpSatConvertSToU:
+    case spv::OpSatConvertUToS:
+    case spv::OpPtrCastToGeneric:
+    case spv::OpGenericCastToPtr:
+    case spv::OpGenericCastToPtrExplicit:
+    case spv::OpIsFinite:
+    case spv::OpIsNormal:
+    case spv::OpSignBitSet:
+    case spv::OpLessOrGreater:
+    case spv::OpOrdered:
+    case spv::OpUnordered:
+    case spv::OpAtomicCompareExchangeWeak:
+    case spv::OpAsyncGroupCopy:
+    case spv::OpWaitGroupEvents:
+      llvm_unreachable("Kernel capability ops not supported");
+
+    case spv::OpGroupAll:
+    case spv::OpGroupAny:
+    case spv::OpGroupBroadcast:
+    case spv::OpGroupIAdd:
+    case spv::OpGroupFAdd:
+    case spv::OpGroupFMin:
+    case spv::OpGroupUMin:
+    case spv::OpGroupSMin:
+    case spv::OpGroupFMax:
+    case spv::OpGroupUMax:
+    case spv::OpGroupSMax:
+      llvm_unreachable("Group capability ops not supported");
+
+    case spv::OpEnqueueMarker:
+    case spv::OpEnqueueKernel:
+    case spv::OpGetKernelNDrangeSubGroupCount:
+    case spv::OpGetKernelNDrangeMaxSubGroupSize:
+    case spv::OpGetKernelWorkGroupSize:
+    case spv::OpGetKernelPreferredWorkGroupSizeMultiple:
+    case spv::OpRetainEvent:
+    case spv::OpReleaseEvent:
+    case spv::OpCreateUserEvent:
+    case spv::OpIsValidEvent:
+    case spv::OpSetUserEventStatus:
+    case spv::OpCaptureEventProfilingInfo:
+    case spv::OpGetDefaultQueue:
+    case spv::OpBuildNDRange:
+      llvm_unreachable("DeviceEnqueue capability ops not supported");
+
+    case spv::OpReadPipe:
+    case spv::OpWritePipe:
+    case spv::OpReservedReadPipe:
+    case spv::OpReservedWritePipe:
+    case spv::OpReserveReadPipePackets:
+    case spv::OpReserveWritePipePackets:
+    case spv::OpCommitReadPipe:
+    case spv::OpCommitWritePipe:
+    case spv::OpIsValidReserveId:
+    case spv::OpGetNumPipePackets:
+    case spv::OpGetMaxPipePackets:
+    case spv::OpGroupReserveReadPipePackets:
+    case spv::OpGroupReserveWritePipePackets:
+    case spv::OpGroupCommitReadPipe:
+    case spv::OpGroupCommitWritePipe:
+      llvm_unreachable("Pipe capability ops not supported");
+
+    case spv::OpIAddCarry:
+    case spv::OpISubBorrow:
+    case spv::OpIMulExtended:
+      llvm_unreachable("TBD");
+  }
+  llvm_unreachable("unknown opcode");
+}
+
+void spirv::LoopMergeContext::mergeContinueBlocks(VariablesStack& vars, spv::Block* testBlock)
+{
+  vars.merge(_continueBlocks.begin(), _continueBlocks.end(), testBlock, this);
+}
+
+void spirv::LoopMergeContext::mergeBreakBlocks(VariablesStack& vars, spv::Block* mergeBlock)
+{
+  // The continue blocks have been merged by now so we can now treat the header
+  // block like a regular break block.
+  _breakBlocks.push_back(std::move(_headerBlock));
+  vars.merge(_breakBlocks.begin(), _breakBlocks.end(), mergeBlock, nullptr);
+}
+
+spirv::LoopMergeContext::VarInfo* spirv::LoopMergeContext::tryFind(const VarDecl* decl)
+{
+  struct Comp
+  {
+    bool operator()(const VarDecl* decl, const VarInfo& info) const { return info.var < decl; }
+    bool operator()(const VarInfo& info, const VarDecl* decl) const { return info.var < decl; }
+  };
+  auto it = std::lower_bound(_rewriteCandidates.begin(), _rewriteCandidates.end(), decl, Comp{});
+  return it == _rewriteCandidates.end() ? nullptr : (it->var == decl ? &*it : nullptr);
+}
+
+void spirv::LoopMergeContext::sort()
+{
+  std::sort(_rewriteCandidates.begin(), _rewriteCandidates.end(), [] (const VarInfo& a, const VarInfo& b)
+            {
+              return a.var < b.var;
+            });
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// LoopStack
+//
+
+class spirv::LoopStack::ScopedPush
+{
+public:
+  ScopedPush(LoopStack& stack, LoopMergeContext* ctx) : _stack(stack) { _stack.push(ctx); }
+  ~ScopedPush() { _stack.pop(); }
+
+private:
+  LoopStack& _stack;
+};
 
 ////////////////////////////////////////////////////////////////////////////////
 // StmtBuilder
@@ -865,7 +1421,7 @@ bool spirv::FunctionBuilder::buildIfStmt(F1 condDirector, F2 thenDirector)
     _vars.setTopBlock(_builder.getBuildPoint());
 
     spv::Builder::If ifBuilder{load(condStmt.expr()), _builder};
-    _vars.push(_builder.getBuildPoint());
+    _vars.push(_builder.getBuildPoint(), _loops.top());
 
     if(thenDirector(*this))
     {
@@ -894,19 +1450,18 @@ bool spirv::FunctionBuilder::buildIfStmt(F1 condDirector, F2 thenDirector, F3 el
 
     llvm::SmallVector<BlockVariables, 2> blockVars;
 
-    _vars.push(_builder.getBuildPoint());
+    _vars.push(_builder.getBuildPoint(), _loops.top());
     if(thenDirector(*this))
     {
       blockVars.push_back(_vars.popAndGet());
       ifBuilder.makeBeginElse();
 
-      _vars.push(_builder.getBuildPoint());
+      _vars.push(_builder.getBuildPoint(), _loops.top());
       if(elseDirector(*this))
       {
         ifBuilder.makeEndIf();
         blockVars.push_back(_vars.popAndGet());
 
-        // TODO: merge
         _vars.merge(blockVars.begin(), blockVars.end(), _builder.getBuildPoint());
         _vars.setTopBlock(_builder.getBuildPoint());
       }

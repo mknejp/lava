@@ -18,6 +18,7 @@
 #include "clang/Lava/CodePrintingTools.h"
 #include "clang/Lava/SPIRV.h"
 #include "SPIRV/SpvBuilder.h"
+#include <stack>
 
 namespace clang
 {
@@ -34,6 +35,8 @@ namespace clang
       struct BlockVariables;
       struct ExprResult;
       class FunctionBuilder;
+      class LoopMergeContext;
+      class LoopStack;
       class ModuleBuilder;
       class RecordBuilder;
       class StmtBuilder;
@@ -151,6 +154,7 @@ struct clang::lava::spirv::BlockVariables
 {
   std::vector<clang::lava::spirv::Variable> vars;
   spv::Block* block;
+  LoopMergeContext* loop;
 };
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -183,15 +187,12 @@ public:
   // Merge the variables coming from control flow blocks and insert
   // OpPhi instructions at the beginning of the merge block ot stores in the
   // preceding blocks. When called the top variable block must be the one
-  // immerdiately dominating all blocks in the given range.
+  // immediately dominating all blocks in the given range.
   //
-  // The BlockVariables objects in the range are moved from and must not be used
-  // after this call. Expects the current build point to be the merge block.
-  //
-  // This must only be used for forward control flow merging, i.e. if/then/else,
-  // switch/case/default, loop exits and "break", but not "continue".
+  // If "loop" is set then this merges "continue" blocks into a loop header
+  // and variables are incorporated into the loop rewrite mechanic as necessary.
   template<class Iter>
-  void merge(Iter first, Iter last, spv::Block* mergeBlock);
+  void merge(Iter first, Iter last, spv::Block* mergeBlock, LoopMergeContext* loop = nullptr);
 
 private:
   static Variable* tryFind(const VarDecl* decl, BlockVariables& blockVars);
@@ -201,14 +202,83 @@ private:
   Id load(const VarDecl& decl);
   Variable& find(const VarDecl* decl);
   Variable* tryFind(const VarDecl* decl);
-  Variable* tryFindInStack(const VarDecl* decl);
+  Variable* tryFindInTop(const VarDecl* decl);
+  Variable* tryFindInStackBelowTop(const VarDecl* decl);
   void storeIfDirty(Variable& var);
   BlockVariables& top() { return _stack.back(); }
 
   TypeCache& _types;
   spv::Builder& _builder;
   const VarDecl* _initing = nullptr;
-  llvm::SmallVector<BlockVariables, 16> _stack;
+  llvm::SmallVector<BlockVariables, 8> _stack;
+};
+
+////////////////////////////////////////////////////////////////////////////////
+// LoopMergeContext
+//
+
+class clang::lava::spirv::LoopMergeContext
+{
+public:
+  LoopMergeContext(spv::Builder& builder, LoopMergeContext* parent);
+
+  void addBreakBlock(BlockVariables block);
+  void addContinueBlock(BlockVariables block);
+  void setHeaderBlock(BlockVariables block);
+  //
+  void addRewriteCandidate(const VarDecl* decl, Id operand, spv::Block* block);
+  void setRewriteId(const VarDecl* decl, Id rewriteId);
+  void applyRewrites();
+
+  void mergeContinueBlocks(VariablesStack& vars, spv::Block* testBlock);
+  void mergeBreakBlocks(VariablesStack& vars, spv::Block* mergeBlock);
+
+  LoopMergeContext* parent() const { return _parent; }
+
+private:
+  struct VarInfo
+  {
+    const VarDecl* var;
+    // TODO: It'd be great to only store the Instructions instead of the blocks,
+    // but spv::Builder creates some instructions under the hood that we don't
+    // have immediate access to. So as a temporary solution we have to remember
+    // the blocks and then rewrite all their instructions consuming the old ID.
+    llvm::SmallVector<spv::Block*, 4> blocks;
+    Id tentativeId;
+    Id rewriteId;
+  };
+
+  void rewriteInstruction(spv::Instruction* inst, Id oldId, Id newId);
+
+  VarInfo* tryFind(const VarDecl* decl);
+  void sort();
+
+  llvm::SmallVector<VarInfo, 4> _rewriteCandidates;
+  llvm::SmallVector<BlockVariables, 4> _breakBlocks;
+  llvm::SmallVector<BlockVariables, 4> _continueBlocks;
+  spv::Block* _preheader;
+  BlockVariables _headerBlock;
+  spv::Builder& _builder;
+  LoopMergeContext* _parent;
+};
+
+////////////////////////////////////////////////////////////////////////////////
+// LoopStack
+//
+
+class clang::lava::spirv::LoopStack
+{
+public:
+  class ScopedPush;
+
+  LoopStack() { push(nullptr); }
+
+  void pop() { _stack.pop(); }
+  void push(LoopMergeContext* ctx) { _stack.push(ctx); }
+  auto top() -> LoopMergeContext* { return _stack.top(); }
+
+private:
+  std::stack<LoopMergeContext*, llvm::SmallVector<LoopMergeContext*, 4>> _stack;
 };
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -246,7 +316,6 @@ private:
 
   static ExprResult makeRValue(Id value) { return {value, nullptr, {}}; }
 
-//  BlockVariables::LoadResult load(const VarDecl& decl) { return _vars.load(decl); }
   Id load(const ExprResult& expr) { return _vars.load(expr); }
   ExprResult store(const ExprResult& target, Id value) { return _vars.store(target, value); }
   ExprResult makePrefixOp(const ExprResult& lvalue, QualType type, IncDecOperator op);
@@ -287,7 +356,6 @@ public:
   Id finalize();
 
 private:
-//  BlockVariables::LoadResult load(const VarDecl& decl) { return _vars.top().load(decl); }
   Id load(const ExprResult& expr) { return _vars.load(expr); }
   ExprResult store(const ExprResult& target, Id value) { return _vars.store(target, value); }
   void trackParameter(const ParmVarDecl& param, Id id);
@@ -301,6 +369,7 @@ private:
   spv::Function* _function = nullptr;
   std::vector<const ParmVarDecl*> _params;
   VariablesStack _vars{_types, _builder, nullptr};
+  LoopStack _loops;
 };
 
 ////////////////////////////////////////////////////////////////////////////////
