@@ -96,6 +96,26 @@ namespace
         llvm_unreachable("operator not supported");
     }
   }
+  bool isConstOrSpec(const spv::Builder& builder, Id value)
+  {
+    switch(builder.getOpCode(value))
+    {
+      case spv::OpConstant:
+      case spv::OpConstantComposite:
+      case spv::OpConstantFalse:
+      case spv::OpConstantNull:
+      case spv::OpConstantSampler:
+      case spv::OpConstantTrue:
+      case spv::OpSpecConstant:
+      case spv::OpSpecConstantComposite:
+      case spv::OpSpecConstantFalse:
+      case spv::OpSpecConstantTrue:
+        return true;
+        
+      default:
+        return false;
+    }
+  }
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -1436,7 +1456,6 @@ bool spirv::FunctionBuilder::buildIfStmt(F1 condDirector, F2 thenDirector)
       ifBuilder.makeEndIf();
       auto thenVars = _vars.popAndGet();
 
-      // TODO: merge
       _vars.merge(&thenVars, &thenVars + 1, _builder.getBuildPoint());
       _vars.setTopBlock(_builder.getBuildPoint());
 
@@ -1553,7 +1572,15 @@ bool spirv::FunctionBuilder::declareVar(const VarDecl& var, F initDirector)
   _vars.markAsInitializing(var);
   if(initDirector(stmt))
   {
-    store({spv::NoResult, &var, {}}, load(stmt.expr()));
+    // If the RHS is a constant we have to create a copy to avoid
+    // self-referencing in operations with constant operands of the same value.
+    // This also gives every local variable a unique <id> to start with.
+    auto value = load(stmt.expr());
+    if(isConstOrSpec(_builder, value))
+    {
+      value = _builder.createCopyObject(value);
+    }
+    store({spv::NoResult, &var, {}}, value);
     return true;
   }
   return false;
