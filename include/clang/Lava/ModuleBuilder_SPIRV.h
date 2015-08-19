@@ -340,6 +340,9 @@ public:
   FunctionBuilder(FunctionDecl& decl, TypeCache& types, TypeMangler& mangler);
 
   bool addParam(const ParmVarDecl& param);
+  template<class F1, class F2, class F3, class F4>
+  bool buildForStmt(bool hasCond, F1 initDirector, F2 condDirector,
+                    F3 incDirector, F4 bodyDirector);
   template<class F1, class F2>
   bool buildIfStmt(F1 condDirector, F2 thenDirector);
   template<class F1, class F2, class F3>

@@ -315,6 +315,32 @@ bool glsl::FunctionBuilder::addParam(const ParmVarDecl& param)
   return true;
 }
 
+template<class F1, class F2, class F3, class F4>
+bool glsl::FunctionBuilder::buildForStmt(bool /*hasCond*/, F1 initDirector,
+                                         F2 condDirector, F3 incDirector, F4 bodyDirector)
+{
+  _w << "for(";
+  _forLoopInitializer = 1;
+  if(initDirector(*this))
+  {
+    _forLoopInitializer = 0;
+    _w << "; ";
+    StmtBuilder condStmt{_typeNamePrinter, _w};
+    if(condDirector(condStmt))
+    {
+      _w << "; ";
+      StmtBuilder incStmt{_typeNamePrinter, _w};
+      if(incDirector(incStmt))
+      {
+        _w << ')' << _w.endln();
+        return bodyDirector(*this);
+      }
+    }
+    return true;
+  }
+  return false;
+}
+
 template<class F1, class F2>
 bool glsl::FunctionBuilder::buildIfStmt(F1 condDirector, F2 thenDirector)
 {
@@ -369,7 +395,10 @@ bool glsl::FunctionBuilder::buildStmt(F stmtDirector)
   StmtBuilder stmt{_typeNamePrinter, _w};
   if(stmtDirector(stmt))
   {
-    _w << ';' << _w.endln();
+    if(_forLoopInitializer < 1)
+    {
+      _w << ';' << _w.endln();
+    }
     return true;
   }
   return false;
@@ -389,22 +418,47 @@ bool glsl::FunctionBuilder::buildWhileStmt(F1 condDirector, F2 bodyDirector)
 }
 
 
+void glsl::FunctionBuilder::emitVarInitPrefix(const VarDecl& var)
+{
+  if(_forLoopInitializer <= 1)
+  {
+    _typeNamePrinter.printTypeName(var.getType(), _w);
+  }
+  else
+  {
+    _w << ',';
+  }
+  _w << ' ' << var.getName();
+}
+
+void glsl::FunctionBuilder::emitVarInitSuffix()
+{
+  if(_forLoopInitializer < 1)
+  {
+    _w << ';' << _w.endln();
+  }
+  else
+  {
+    ++_forLoopInitializer;
+  }
+}
+
 bool glsl::FunctionBuilder::declareUndefinedVar(const VarDecl& var)
 {
-  _typeNamePrinter.printTypeName(var.getType(), _w);
-  _w << ' ' << var.getName() << ';' << _w.endln();
+  emitVarInitPrefix(var);
+  emitVarInitSuffix();
   return true;
 }
 
 template<class F>
 bool glsl::FunctionBuilder::declareVar(const VarDecl& var, F initDirector)
 {
+  emitVarInitPrefix(var);
   StmtBuilder stmt{_typeNamePrinter, _w};
-  _typeNamePrinter.printTypeName(var.getType(), _w);
-  _w << ' ' << var.getName() << " = ";
+  _w << " = ";
   if(initDirector(stmt))
   {
-    _w << ';' << _w.endln();
+    emitVarInitSuffix();
     return true;
   }
   return false;

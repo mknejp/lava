@@ -111,6 +111,9 @@ public:
   FunctionBuilder(FunctionDecl& decl, TypeNamePrinter& typeNamePrinter);
 
   bool addParam(const ParmVarDecl& param);
+  template<class F1, class F2, class F3, class F4>
+  bool buildForStmt(bool hasCond, F1 initDirector, F2 condDirector,
+                    F3 incDirector, F4 bodyDirector);
   template<class F1, class F2>
   bool buildIfStmt(F1 condDirector, F2 thenDirector);
   template<class F1, class F2, class F3>
@@ -135,6 +138,8 @@ public:
 
 private:
   void buildProtoStrings();
+  void emitVarInitPrefix(const VarDecl& var);
+  void emitVarInitSuffix();
 
   std::string _declString;
   std::string _defString;
@@ -145,6 +150,7 @@ private:
   FunctionDecl& _decl;
   QualType _returnType;
   std::vector<const ParmVarDecl*> _formalParams;
+  int _forLoopInitializer = 0;
 };
 
 class clang::lava::glsl::ModuleBuilder

@@ -1440,6 +1440,55 @@ bool spirv::FunctionBuilder::addParam(const ParmVarDecl& param)
   return true;
 }
 
+template<class F1, class F2, class F3, class F4>
+bool spirv::FunctionBuilder::buildForStmt(bool hasCond,
+                                          F1 initDirector, F2 condDirector,
+                                          F3 incDirector, F4 bodyDirector)
+{
+  if(initDirector(*this))
+  {
+    _vars.setTopBlock(_builder.getBuildPoint());
+    LoopMergeContext loop{_builder, _loops.top()};
+    LoopStack::ScopedPush push{_loops, &loop};
+
+    _builder.makeNewLoop(true);
+    auto* testBlock = _builder.getBuildPoint();
+    _vars.push(testBlock, &loop);
+    if(hasCond)
+    {
+      StmtBuilder condStmt{_types, _vars};
+      if(!condDirector(condStmt))
+        return false;
+      _builder.createLoopTestBranch(load(condStmt.expr()));
+    }
+    else
+    {
+      _builder.createBranchToBody();
+    }
+    auto* bodyBlock = _builder.getBuildPoint();
+    _vars.push(bodyBlock, &loop);
+    if(bodyDirector(*this))
+    {
+      // TODO: remember continue director for ContinueStmt
+      StmtBuilder incStmt{_types, _vars};
+      if(incDirector(incStmt))
+      {
+
+        _builder.closeLoop();
+        auto mergeBlock = _builder.getBuildPoint();
+        loop.addContinueBlock(_vars.popAndGet());
+        loop.setHeaderBlock(_vars.popAndGet());
+        loop.mergeContinueBlocks(_vars, testBlock);
+        loop.mergeBreakBlocks(_vars, mergeBlock);
+        loop.applyRewrites();
+        _vars.setTopBlock(mergeBlock);
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 template<class F1, class F2>
 bool spirv::FunctionBuilder::buildIfStmt(F1 condDirector, F2 thenDirector)
 {
@@ -1559,7 +1608,7 @@ bool spirv::FunctionBuilder::declareUndefinedVar(const VarDecl& var)
   StmtBuilder stmt{_types, _vars};
   // Store the variable with an undefined value. We need this to have an operand
   // for OpPhi for all blocks dominated by the current one.
-  _vars.initUndefined(&var);
+  _builder.addName(_vars.initUndefined(&var), var.getNameAsString().c_str());
   return true;
 }
 
@@ -1580,7 +1629,11 @@ bool spirv::FunctionBuilder::declareVar(const VarDecl& var, F initDirector)
     {
       value = _builder.createCopyObject(value);
     }
-    store({spv::NoResult, &var, {}}, value);
+    auto result = store({spv::NoResult, &var, {}}, value);
+    if(result.value != spv::NoResult)
+    {
+      _builder.addName(result.value, var.getNameAsString().c_str());
+    }
     return true;
   }
   return false;

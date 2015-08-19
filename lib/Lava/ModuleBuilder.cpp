@@ -46,6 +46,7 @@ namespace
     // Statements
     void VisitCompoundStmt(const CompoundStmt* stmt);
     void VisitDeclStmt(const DeclStmt* stmt);
+    void VisitForStmt(const ForStmt* stmt);
     void VisitIfStmt(const IfStmt* stmt);
     void VisitReturnStmt(const ReturnStmt* stmt);
     void VisitWhileStmt(const WhileStmt* stmt);
@@ -121,7 +122,10 @@ namespace
   {
     return [expr] (StmtBuilder& builder)
     {
-      ExprVisitor{builder}.Visit(expr);
+      if(expr)
+      {
+        ExprVisitor{builder}.Visit(expr);
+      }
     };
   };
 }
@@ -143,9 +147,53 @@ void FunctionVisitor::VisitCompoundStmt(const CompoundStmt* stmt)
 
 void FunctionVisitor::VisitDeclStmt(const DeclStmt* stmt)
 {
+  if(!stmt)
+    return;
+
   for(const auto* decl : stmt->decls())
   {
     DeclVisitor::Visit(decl);
+  }
+}
+
+void FunctionVisitor::VisitForStmt(const ForStmt* stmt)
+{
+  auto* initDeclStmt = dyn_cast_or_null<DeclStmt>(stmt->getInit());
+  auto* condDeclStmt = stmt->getConditionVariableDeclStmt();
+
+  auto build = [stmt] (FunctionBuilder& builder)
+  {
+    auto init = [stmt] (FunctionBuilder& builder)
+    {
+      if(!stmt->getConditionVariableDeclStmt())
+      {
+        FunctionVisitor{builder}.StmtVisitor::Visit(stmt->getInit());
+      }
+    };
+    auto cond = [stmt] (StmtBuilder& builder)
+    {
+      makeExprBuilder(stmt->getCond())(builder);
+    };
+    builder.buildForStmt(stmt->getCond() != nullptr,
+                         init, cond, makeExprBuilder(stmt->getInc()),
+                         makeBlockBuilder(stmt->getBody()));
+  };
+
+  // If the condition declares a new variables we have to drag both the
+  // initialier *and* the condition variable declaration out of the loop to
+  // ensure the condition variable is declared *after* the initializer has run.
+  if(condDeclStmt)
+  {
+    _builder.pushScope([this, initDeclStmt, condDeclStmt, build] (FunctionBuilder& builder)
+    {
+      VisitDeclStmt(initDeclStmt);
+      VisitDeclStmt(condDeclStmt);
+      build(builder);
+    });
+  }
+  else
+  {
+    build(_builder);
   }
 }
 
