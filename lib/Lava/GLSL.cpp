@@ -280,7 +280,7 @@ bool glsl::StmtBuilder::emitParenExpr(F subexpr)
 template<class F>
 bool glsl::StmtBuilder::emitUnaryOperator(const UnaryOperator& expr, F subexpr)
 {
-  if(expr.isPrefix())
+  if(!expr.isPostfix())
   {
     printOperator(expr.getOpcode(), _w);
     return subexpr(*this);
