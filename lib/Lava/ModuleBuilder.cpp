@@ -46,6 +46,7 @@ namespace
     // Statements
     void VisitCompoundStmt(const CompoundStmt* stmt);
     void VisitDeclStmt(const DeclStmt* stmt);
+    void VisitDoStmt(const DoStmt* stmt);
     void VisitForStmt(const ForStmt* stmt);
     void VisitIfStmt(const IfStmt* stmt);
     void VisitReturnStmt(const ReturnStmt* stmt);
@@ -154,6 +155,12 @@ void FunctionVisitor::VisitDeclStmt(const DeclStmt* stmt)
   {
     DeclVisitor::Visit(decl);
   }
+}
+
+void FunctionVisitor::VisitDoStmt(const DoStmt* stmt)
+{
+  _builder.buildDoStmt(makeExprBuilder(stmt->getCond()),
+                       makeBlockBuilder(stmt->getBody()));
 }
 
 void FunctionVisitor::VisitForStmt(const ForStmt* stmt)

@@ -111,6 +111,8 @@ public:
   FunctionBuilder(FunctionDecl& decl, TypeNamePrinter& typeNamePrinter);
 
   bool addParam(const ParmVarDecl& param);
+  template<class F1, class F2>
+  bool buildDoStmt(F1 condDirector, F2 bodyDirector);
   template<class F1, class F2, class F3, class F4>
   bool buildForStmt(bool hasCond, F1 initDirector, F2 condDirector,
                     F3 incDirector, F4 bodyDirector);

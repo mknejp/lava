@@ -177,6 +177,7 @@ public:
   // It is the *only* variable which may be read if not being tracked.
   void markAsInitializing(const VarDecl& decl);
   auto store(const ExprResult& target, Id value) -> ExprResult;
+  auto store(const ExprResult& target, const ExprResult& source) -> ExprResult;
   void setTopBlock(spv::Block* block);
   void trackVariable(const VarDecl& decl, Id id);
 
@@ -320,6 +321,7 @@ private:
 
   Id load(const ExprResult& expr) { return _vars.load(expr); }
   ExprResult store(const ExprResult& target, Id value) { return _vars.store(target, value); }
+  ExprResult store(const ExprResult& target, const ExprResult& source) { return _vars.store(target, source); }
   ExprResult makePrefixOp(const ExprResult& lvalue, QualType type, IncDecOperator op);
   ExprResult makePostfixOp(const ExprResult& lvalue, QualType type, IncDecOperator op);
   IncDecLiteral makeLiteralForIncDec(QualType type);
@@ -340,6 +342,8 @@ public:
   FunctionBuilder(FunctionDecl& decl, TypeCache& types, TypeMangler& mangler);
 
   bool addParam(const ParmVarDecl& param);
+  template<class F1, class F2>
+  bool buildDoStmt(F1 condDirector, F2 bodyDirector);
   template<class F1, class F2, class F3, class F4>
   bool buildForStmt(bool hasCond, F1 initDirector, F2 condDirector,
                     F3 incDirector, F4 bodyDirector);
@@ -363,8 +367,11 @@ public:
   Id finalize();
 
 private:
+  template<class F1, class F2>
+  bool buildSimpleLoopCommon(bool testFirst, F1 condDirector, F2 bodyDirector);
   Id load(const ExprResult& expr) { return _vars.load(expr); }
   ExprResult store(const ExprResult& target, Id value) { return _vars.store(target, value); }
+  ExprResult store(const ExprResult& target, const ExprResult& source) { return _vars.store(target, source); }
   void trackParameter(const ParmVarDecl& param, Id id);
 
   TypeCache& _types;

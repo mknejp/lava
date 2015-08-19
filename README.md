@@ -241,7 +241,7 @@ Legend:
 | `break` | :x: | :x: | :x: | :x: |
 | `continue` | :x: | :x: | :x: | :x: |
 | `discard` | :x: | :x: | :x: | :x: |
-| `do` | :x: | :x: | :x: | :x: |
+| `do` | :white_check_mark: | :white_check_mark: | :x: | :x: |
 | `for` | :white_check_mark: | :white_check_mark: | :x: | :x: |
 | `if`/`else` | :white_check_mark: | :white_check_mark: | :x: | :x: |
 | `return` | :white_check_mark: | :white_check_mark: | :x: | :x: |

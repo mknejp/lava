@@ -315,6 +315,23 @@ bool glsl::FunctionBuilder::addParam(const ParmVarDecl& param)
   return true;
 }
 
+template<class F1, class F2>
+bool glsl::FunctionBuilder::buildDoStmt(F1 condDirector, F2 bodyDirector)
+{
+  _w << "do" << _w.endln();
+  if(bodyDirector(*this))
+  {
+    StmtBuilder condStmt{_typeNamePrinter, _w};
+    _w << "while(";
+    if(condDirector(condStmt))
+    {
+      _w << ");" << _w.endln();
+      return true;
+    }
+  }
+  return false;
+}
+
 template<class F1, class F2, class F3, class F4>
 bool glsl::FunctionBuilder::buildForStmt(bool /*hasCond*/, F1 initDirector,
                                          F2 condDirector, F3 incDirector, F4 bodyDirector)
