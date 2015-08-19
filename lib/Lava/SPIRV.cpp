@@ -554,6 +554,46 @@ spirv::ExprResult spirv::VariablesStack::store(const ExprResult& target, Id valu
 //  }
 }
 
+spirv::ExprResult spirv::VariablesStack::store(const ExprResult& target,
+                                               const ExprResult& source)
+{
+  if(!target.variable)
+    llvm_unreachable("assigning to temporary");
+
+  // If the RHS is a constant we have to create a copy to avoid
+  // self-referencing in operations with constant operands of the same value.
+  // This also gives every local variable a unique <id> to start with.
+  // Also avoid aliasing of two variables for the same reason.
+  // TODO: references
+  if(source.variable)
+  {
+    if(source.variable != target.variable)
+    {
+      if(_initing == target.variable)
+      {
+        return store(target, _builder.createCopyObject(load(source)));
+      }
+      else
+      {
+        auto&var = find(target.variable);
+        if(!var.isVolatile)
+        {
+          return store(target, _builder.createCopyObject(load(source)));
+        }
+      }
+    }
+    else
+    {
+      return target;
+    }
+  }
+  else if(isConstOrSpec(_builder, source.value))
+  {
+    return store(target, _builder.createCopyObject(source.value));
+  }
+  return store(target, source.value);
+}
+
 void spirv::VariablesStack::storeIfDirty(Variable& var)
 {
   assert(top().block && "must have a block set");
@@ -1215,7 +1255,7 @@ bool spirv::StmtBuilder::emitBinaryOperator(const BinaryOperator& expr, RHS lhs,
                                                      load(_subexpr)));
           break;
         case BO_Assign:
-          _subexpr = store(op1, load(_subexpr));
+          _subexpr = store(op1, _subexpr);
           break;
         case BO_Comma:
           // Just drop the first operand and return the second
@@ -1393,10 +1433,10 @@ spirv::StmtBuilder::IncDecLiteral spirv::StmtBuilder::makeLiteralForIncDec(QualT
   {
     case BuiltinType::Short:
       // TODO: int16
-      llvm_unreachable("int32 not yet implemented");
+      llvm_unreachable("int16 not yet implemented");
     case BuiltinType::UShort:
       // TODO: uint16
-      llvm_unreachable("uint32 not yet implemented");
+      llvm_unreachable("uint16 not yet implemented");
     case BuiltinType::Int:
       return {_builder.makeIntConstant(1), false, true};
     case BuiltinType::UInt:
@@ -1621,15 +1661,7 @@ bool spirv::FunctionBuilder::declareVar(const VarDecl& var, F initDirector)
   _vars.markAsInitializing(var);
   if(initDirector(stmt))
   {
-    // If the RHS is a constant we have to create a copy to avoid
-    // self-referencing in operations with constant operands of the same value.
-    // This also gives every local variable a unique <id> to start with.
-    auto value = load(stmt.expr());
-    if(isConstOrSpec(_builder, value))
-    {
-      value = _builder.createCopyObject(value);
-    }
-    auto result = store({spv::NoResult, &var, {}}, value);
+    auto result = store({spv::NoResult, &var, {}}, stmt.expr());
     if(result.value != spv::NoResult)
     {
       _builder.addName(result.value, var.getNameAsString().c_str());
