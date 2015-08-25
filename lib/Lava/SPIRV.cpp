@@ -293,7 +293,9 @@ class spirv::VariablesStack::Merger
 {
 public:
   template<class Iter>
-  Merger(VariablesStack& self, Iter first, Iter last, spv::Block* mergeBlock, LoopMergeContext* loop);
+  Merger(VariablesStack& self, Iter first, Iter last, spv::Block* mergeBlock);
+
+  MergeResult result() { return std::move(_result); }
 
 private:
   struct Var
@@ -303,31 +305,31 @@ private:
   };
   using Grouped = std::map<const VarDecl*, std::vector<Var>>;
 
-  void processVariable(Grouped::value_type& kvp, VariablesStack& self, LoopMergeContext* loop);
+  void processVariable(Grouped::value_type& kvp, VariablesStack& self);
   template<class Iter>
   void groupByVarDecl(Iter first, Iter last);
-  void storeIfDirty(std::vector<Var>& group);
+  void resolveAsStore(VariablesStack& self, const Grouped::value_type& group);
+  void resolveAsPhi(Variable& myVar, VariablesStack& self, const Grouped::value_type& group);
 
   Grouped _grouped;
   llvm::SmallVector<spv::Block*, 8> _blocks;
-  spv::Block* const _mergeBlock;
+  MergeResult _result;
 };
 
 template<class Iter>
 spirv::VariablesStack::Merger::Merger(VariablesStack& self, Iter first, Iter last,
-                                      spv::Block* mergeBlock, LoopMergeContext* loop)
-: _mergeBlock(mergeBlock)
+                                      spv::Block* mergeBlock)
 {
+  _result.mergeBlock = mergeBlock;
   groupByVarDecl(std::move(first), std::move(last));
   for(auto& kvp : _grouped)
   {
-    processVariable(kvp, self, loop);
+    processVariable(kvp, self);
   }
 }
 
 void spirv::VariablesStack::Merger::processVariable(Grouped::value_type& group,
-                                                    VariablesStack& self,
-                                                    LoopMergeContext* loop)
+                                                    VariablesStack& self)
 {
   Variable* myVar = group.first->hasLocalStorage() ? &self.find(group.first) : self.tryFind(group.first);
   if(!myVar)
@@ -341,7 +343,7 @@ void spirv::VariablesStack::Merger::processVariable(Grouped::value_type& group,
     // TODO: if the domiating block is not a predecessor of the merge then
     // alternatively we might balance out load/stores according to load/store
     // ratios in the branches.
-    storeIfDirty(group.second);
+    resolveAsStore(self, group);
   }
   else
   {
@@ -366,90 +368,63 @@ void spirv::VariablesStack::Merger::processVariable(Grouped::value_type& group,
       // alternatively we might balance out load/stores according to load/store
       // ratios in the branches.
       assert(myVar->decl->hasLocalStorage() && myVar->pointer != spv::NoResult && "not a local pointer?");
-      storeIfDirty(group.second);
+      resolveAsStore(self, group);
     }
     else
     {
       // Case 3: Some block modified the variable
       // Collect all the participating values. If a block modified the variable
-      // insert the new value into OpPhi, for all the others take the value from
-      // the dominating block.
-      llvm::DenseSet<spv::Block*> writtenBlocks;
-      auto addLoopRewriteCandidate = [loop, &self, &group, this] (Id value)
-      {
-        // If we are merging the loop header, then some blocks may have only
-        // read the value but not modified it. In that case we have to rewrite
-        // the OpPhi itself and make it use its own result from those branches.
-        if(loop)
-        {
-          loop->addRewriteCandidate(group.first, value, _mergeBlock);
-          if(loop->parent())
-          {
-            // If we are in a nested loop then the OpPhi instruction may be a
-            // rewrite candidate in the parent loop for the case where we enter
-            // from the pre-header.
-            if(loop->parent())
-            {
-              loop->parent()->addRewriteCandidate(group.first, value, _mergeBlock);
-            }
-          }
-        }
-      };
-      // Have to build the instructions manually since we insert it at the front
-      auto inst = llvm::make_unique<spv::Instruction>(self._builder.getUniqueId(),
-                                                      self._types[myVar->decl->getType()],
-                                                      spv::OpPhi);
-      if(_mergeBlock->hasPredecessor(self.top().block))
-      {
-        addLoopRewriteCandidate(myVar->value);
-        inst->addIdOperand(myVar->value);
-        inst->addIdOperand(self.top().block->getId());
-      }
-      for(auto& var : group.second)
-      {
-        addLoopRewriteCandidate(var.variable.value);
-        inst->addIdOperand(var.variable.value);
-        inst->addIdOperand(var.block->getId());
-        writtenBlocks.insert(var.block);
-      }
-      for(auto b : _blocks)
-      {
-        if(writtenBlocks.find(b) == writtenBlocks.end())
-        {
-          addLoopRewriteCandidate(myVar->value);
-          inst->addIdOperand(myVar->value);
-          inst->addIdOperand(b->getId());
-        }
-      }
-      // TODO: Is this a redundant Phi?
-      _mergeBlock->addInstructionAtFront(inst.get());
-      if(loop)
-      {
-        // The result of this OpPhi is re-used in the loop and gives us the <id>
-        // for rewriting all the other consuming instructions.
-        loop->setRewriteId(myVar->decl, inst->getResultId());
-      }
-      else
-      {
-        // The OpPhi gives the new value to be used for the following code.
-        self.store({spv::NoResult, myVar->decl, {}}, inst->getResultId());
-      }
-      inst.release();
-      // If any block thinks its value is dirty than we have to assume the worst case
-      myVar->isDirty = myVar->isDirty || std::any_of(group.second.begin(), group.second.end(), [] (const Var& var)
-                                                     {
-                                                       return var.variable.isDirty;
-                                                     });
+      // insert the new value into the result, for all the others take the value
+      // from the dominating block.
+      resolveAsPhi(*myVar, self, group);
     }
   }
 }
 
-void spirv::VariablesStack::Merger::storeIfDirty(std::vector<Var>& group)
+void spirv::VariablesStack::Merger::resolveAsStore(VariablesStack& self, const Grouped::value_type& group)
 {
-  for(auto& var : group)
+  auto result = MergeResult::MergedVariable{};
+  result.isDirty = false;
+  for(auto& var : group.second)
   {
-    VariablesStack::storeIfDirty(var.variable, var.block);
+    if(self.shouldStoreIfDirty(var.variable))
+    {
+      result.storeBlocks.emplace_back(var.variable.pointer, var.variable.value, var.block);
+    }
   }
+  if(!result.storeBlocks.empty())
+  {
+    _result.mergedVariables.emplace(group.first, std::move(result));
+  }
+}
+
+void spirv::VariablesStack::Merger::resolveAsPhi(Variable& myVar, VariablesStack& self,
+                                                  const Grouped::value_type& group)
+{
+  auto result = MergeResult::MergedVariable{};
+  // If any block thinks its value is dirty than we have to assume the worst case
+  result.isDirty = myVar.isDirty;
+
+  llvm::DenseSet<spv::Block*> writtenBlocks;
+
+  if(_result.mergeBlock->hasPredecessor(self.top().block))
+  {
+    result.phiBlocks.emplace_back(myVar.value, self.top().block);
+  }
+  for(auto& var : group.second)
+  {
+    result.phiBlocks.emplace_back(var.variable.value, var.block);
+    result.isDirty = result.isDirty || var.variable.isDirty;
+    writtenBlocks.insert(var.block);
+  }
+  for(auto b : _blocks)
+  {
+    if(writtenBlocks.find(b) == writtenBlocks.end())
+    {
+      result.phiBlocks.emplace_back(myVar.value, b);
+    }
+  }
+  _result.mergedVariables.emplace(group.first, std::move(result));
 }
 
 template<class Iter>
@@ -461,7 +436,7 @@ void spirv::VariablesStack::Merger::groupByVarDecl(Iter first, Iter last)
     // If this block doesn't directly branch to the merge block it's a break or
     // continue block in a loop/selection merge block and deoesn't contribute
     // to the merge of an if/then/else or switch.
-    if(_mergeBlock->hasPredecessor(first->block))
+    if(_result.mergeBlock->hasPredecessor(first->block))
     {
       _blocks.push_back(first->block);
       for(auto& var : first->vars)
@@ -617,31 +592,21 @@ spirv::ExprResult spirv::VariablesStack::store(const ExprResult& target,
   return store(target, source.value);
 }
 
-void spirv::VariablesStack::storeIfDirty(Variable& var)
-{
-  assert(top().block && "must have a block set");
-  return storeIfDirty(var, top().block);
-}
-
-void spirv::VariablesStack::storeIfDirty(Variable& var, spv::Block* block)
+bool spirv::VariablesStack::shouldStoreIfDirty(const Variable& var)
 {
   if(var.pointer == spv::NoResult)
   {
-    return;
+    return false;
   }
   else if(var.isVolatile)
   {
-    return; // Never dirty
+    return false; // Never dirty
   }
   else if(var.isDirty)
   {
-    auto inst = llvm::make_unique<spv::Instruction>(spv::OpStore);
-    inst->addIdOperand(var.pointer);
-    inst->addIdOperand(var.value);
-    block->insertInstructionBeforeTerminal(inst.get());
-    inst.release();
-    var.isDirty = false;
+    return true;
   }
+  return false;
 }
 
 void spirv::VariablesStack::markAsInitializing(const VarDecl& decl)
@@ -725,9 +690,43 @@ spirv::Id spirv::VariablesStack::findPreLoopValue(const VarDecl* decl, LoopMerge
 }
 
 template<class Iter>
-void spirv::VariablesStack::merge(Iter first, Iter last, spv::Block* mergeBlock, LoopMergeContext* loop)
+spirv::MergeResult spirv::VariablesStack::resolveMerge(Iter first, Iter last, spv::Block* mergeBlock)
 {
-  Merger m(*this, std::move(first), std::move(last), mergeBlock, loop);
+  return Merger(*this, std::move(first), std::move(last), mergeBlock).result();
+}
+
+void spirv::VariablesStack::applyMergeResult(MergeResult& merge)
+{
+  std::unique_ptr<spv::Instruction> inst;
+  for(auto& variable : merge.mergedVariables)
+  {
+    if(!variable.second.storeBlocks.empty())
+    {
+      for(const auto& store : variable.second.storeBlocks)
+      {
+        auto inst = llvm::make_unique<spv::Instruction>(spv::OpStore);
+        inst->addIdOperand(store.pointer);
+        inst->addIdOperand(store.value);
+        store.block->insertInstructionBeforeTerminal(inst.get());
+        inst.release();
+      }
+    }
+    else if(!variable.second.phiBlocks.empty())
+    {
+      auto& var = find(variable.first);
+      auto inst = llvm::make_unique<spv::Instruction>(_builder.getUniqueId(), _types[var.decl->getType()], spv::OpPhi);
+      for(const auto& phi : variable.second.phiBlocks)
+      {
+        inst->addIdOperand(phi.value);
+        inst->addIdOperand(phi.block->getId());
+      }
+      merge.mergeBlock->addInstructionAtFront(inst.get());
+      var.isDirty = variable.second.isDirty;
+      store({spv::NoResult, variable.first, {}}, inst->getResultId());
+      variable.second.phiResultId = var.value;
+      inst.release();
+    }
+  }
 }
 
 spirv::Variable& spirv::VariablesStack::find(const VarDecl* decl)
@@ -790,10 +789,9 @@ void spirv::VariablesStack::sort(BlockVariables& blockVars)
 //
 
 template<class F>
-spirv::LoopMergeContext::LoopMergeContext(spv::Builder& builder, VariablesStack& vars,
+spirv::LoopMergeContext::LoopMergeContext(spv::Block* preheader, VariablesStack& vars,
                                           LoopMergeContext* parent, F incDirector)
-: _builder(builder)
-, _preheader(builder.getBuildPoint())
+: _preheader(preheader)
 , _parent(parent)
 , _vars(vars)
 , _incDirector(std::move(incDirector))
@@ -847,6 +845,13 @@ void spirv::LoopMergeContext::addRewriteCandidate(const VarDecl* decl, Id operan
       sort();
     }
   }
+}
+
+void spirv::LoopMergeContext::applyMerge(spv::Block* mergeBlock)
+{
+  mergeContinueBlocks();
+  mergeBreakBlocks(mergeBlock);
+  applyRewrites();
 }
 
 void spirv::LoopMergeContext::setRewriteId(const VarDecl* decl, Id rewriteId)
@@ -1238,9 +1243,31 @@ void spirv::LoopMergeContext::rewriteInstruction(spv::Instruction* inst, Id oldI
   llvm_unreachable("unknown opcode");
 }
 
-void spirv::LoopMergeContext::mergeContinueBlocks(spv::Block* testBlock)
+void spirv::LoopMergeContext::mergeContinueBlocks()
 {
-  _vars.merge(_continueBlocks.begin(), _continueBlocks.end(), testBlock, this);
+  auto* headerBlock = _headerBlock.block;
+  assert(headerBlock && "header block not set");
+  auto merge = _vars.resolveMerge(_continueBlocks.begin(), _continueBlocks.end(), headerBlock);
+  _vars.applyMergeResult(merge);
+  for(const auto& variable : merge.mergedVariables)
+  {
+    if(!variable.second.phiBlocks.empty())
+    {
+      assert(variable.second.phiResultId != spv::NoResult && "OpPhi not generated");
+      for(const auto& phi : variable.second.phiBlocks)
+      {
+        // The OpPhi is itself a rewrite candidate
+        addRewriteCandidate(variable.first, phi.value, headerBlock);
+        // If this is a nested loop the OpPhi is a rewrite candidate in the parent loop
+        if(_parent)
+        {
+          _parent->addRewriteCandidate(variable.first, phi.value, headerBlock);
+        }
+      }
+      // The rewrite value is the result of the new OpPhi
+      setRewriteId(variable.first, variable.second.phiResultId);
+    }
+  }
 }
 
 void spirv::LoopMergeContext::mergeBreakBlocks(spv::Block* mergeBlock)
@@ -1248,7 +1275,21 @@ void spirv::LoopMergeContext::mergeBreakBlocks(spv::Block* mergeBlock)
   // The continue blocks have been merged by now so we can now treat the header
   // block like a regular break block.
   _breakBlocks.push_back(std::move(_headerBlock));
-  _vars.merge(_breakBlocks.begin(), _breakBlocks.end(), mergeBlock, nullptr);
+  auto merge = _vars.resolveMerge(_breakBlocks.begin(), _breakBlocks.end(), mergeBlock);
+  _vars.applyMergeResult(merge);
+  // The only thing left to do is add the merge block as a rewrite candidate
+  // for any OpPhi generated
+  for(const auto& variable : merge.mergedVariables)
+  {
+    if(!variable.second.phiBlocks.empty())
+    {
+      for(const auto& phi : variable.second.phiBlocks)
+      {
+        // The OpPhi is itself a rewrite candidate
+        addRewriteCandidate(variable.first, phi.value, mergeBlock);
+      }
+    }
+  }
 }
 
 bool spirv::LoopMergeContext::invokeIncDirector(FunctionBuilder& builder)
@@ -1563,12 +1604,6 @@ bool spirv::FunctionBuilder::addParam(const ParmVarDecl& param)
   return true;
 }
 
-template<class F1, class F2>
-bool spirv::FunctionBuilder::buildDoStmt(F1 condDirector, F2 bodyDirector)
-{
-  return buildSimpleLoopCommon(false, std::move(condDirector), std::move(bodyDirector));
-}
-
 template<class F>
 bool spirv::FunctionBuilder::buildContinueStmt(F&& cleanupDirector)
 {
@@ -1583,6 +1618,12 @@ bool spirv::FunctionBuilder::buildContinueStmt(F&& cleanupDirector)
   return false;
 }
 
+template<class F1, class F2>
+bool spirv::FunctionBuilder::buildDoStmt(F1 condDirector, F2 bodyDirector)
+{
+  return buildSimpleLoopCommon(false, std::move(condDirector), std::move(bodyDirector));
+}
+
 template<class F1, class F2, class F3, class F4>
 bool spirv::FunctionBuilder::buildForStmt(bool hasCond,
                                           F1 initDirector, F2 condDirector,
@@ -1591,7 +1632,7 @@ bool spirv::FunctionBuilder::buildForStmt(bool hasCond,
   if(initDirector(*this))
   {
     _vars.setTopBlock(_builder.getBuildPoint());
-    LoopMergeContext loop{_builder, _vars, _loops.top(), [incDirector] (FunctionBuilder& builder)
+    LoopMergeContext loop{_builder.getBuildPoint(), _vars, _loops.top(), [incDirector] (FunctionBuilder& builder)
     {
       StmtBuilder incStmt{builder._types, builder._vars};
       return incDirector(incStmt);
@@ -1624,9 +1665,7 @@ bool spirv::FunctionBuilder::buildForStmt(bool hasCond,
         _vars.collapseLoopStackIntoTop();
         loop.addContinueBlock(_vars.pop());
         loop.setHeaderBlock(_vars.pop());
-        loop.mergeContinueBlocks(testBlock);
-        loop.mergeBreakBlocks(mergeBlock);
-        loop.applyRewrites();
+        loop.applyMerge(mergeBlock);
         _vars.setTopBlock(mergeBlock);
         return true;
       }
@@ -1651,7 +1690,7 @@ bool spirv::FunctionBuilder::buildIfStmt(F1 condDirector, F2 thenDirector)
       ifBuilder.makeEndIf();
       auto thenVars = _vars.pop();
 
-      _vars.merge(&thenVars, &thenVars + 1, _builder.getBuildPoint());
+      _vars.applyMergeResult(_vars.resolveMerge(&thenVars, &thenVars + 1, _builder.getBuildPoint()));
       _vars.setTopBlock(_builder.getBuildPoint());
 
       return true;
@@ -1684,7 +1723,7 @@ bool spirv::FunctionBuilder::buildIfStmt(F1 condDirector, F2 thenDirector, F3 el
         ifBuilder.makeEndIf();
         blockVars.push_back(_vars.pop());
 
-        _vars.merge(blockVars.begin(), blockVars.end(), _builder.getBuildPoint());
+        _vars.applyMergeResult(_vars.resolveMerge(blockVars.begin(), blockVars.end(), _builder.getBuildPoint()));
         _vars.setTopBlock(_builder.getBuildPoint());
       }
       return true;
@@ -1809,12 +1848,11 @@ bool spirv::FunctionBuilder::buildSimpleLoopCommon(bool testFirst, F1 condDirect
   _vars.setTopBlock(preheaderBlock);
 
   StmtBuilder condStmt{_types, _vars};
-  LoopMergeContext loop{_builder, _vars, _loops.top(), nullptr};
+  LoopMergeContext loop{_builder.getBuildPoint(), _vars, _loops.top(), nullptr};
   LoopStack::ScopedPush push{_loops, &loop};
 
   _builder.makeNewLoop(testFirst);
   assert(preheaderBlock->getNumSuccessors() == 1);
-  auto* headerBlock = preheaderBlock->getSuccessor(0);
   auto* testBlock = _builder.getBuildPoint();
   _vars.push(testBlock, &loop);
   if(condDirector(condStmt))
@@ -1829,9 +1867,7 @@ bool spirv::FunctionBuilder::buildSimpleLoopCommon(bool testFirst, F1 condDirect
       _vars.collapseLoopStackIntoTop();
       loop.addContinueBlock(_vars.pop());
       loop.setHeaderBlock(_vars.pop());
-      loop.mergeContinueBlocks(headerBlock);
-      loop.mergeBreakBlocks(mergeBlock);
-      loop.applyRewrites();
+      loop.applyMerge(mergeBlock);
       _vars.setTopBlock(mergeBlock);
       return true;
     }

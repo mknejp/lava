@@ -34,15 +34,16 @@ namespace clang
     {
       struct BlockVariables;
       struct ExprResult;
-      class FunctionBuilder;
-      class LoopMergeContext;
-      class LoopStack;
-      class ModuleBuilder;
-      class RecordBuilder;
-      class StmtBuilder;
-      class TypeCache;
+      class  FunctionBuilder;
+      class  LoopMergeContext;
+      class  LoopStack;
+      struct MergeResult;
+      class  ModuleBuilder;
+      class  RecordBuilder;
+      class  StmtBuilder;
+      class  TypeCache;
       struct Variable;
-      class VariablesStack;
+      class  VariablesStack;
 
       using Id = ::spv::Id;
 
@@ -162,6 +163,37 @@ struct clang::lava::spirv::BlockVariables
 };
 
 ////////////////////////////////////////////////////////////////////////////////
+// MergeResult
+//
+
+struct clang::lava::spirv::MergeResult
+{
+  struct Phi
+  {
+    Phi(Id value, spv::Block* block) : value(value), block(block) { }
+    Id value;
+    spv::Block* block;
+  };
+  struct Store
+  {
+    Store(Id pointer, Id value, spv::Block* block) : pointer(pointer), value(value), block(block) { }
+    Id pointer;
+    Id value;
+    spv::Block* block;
+  };
+  struct MergedVariable
+  {
+    std::vector<Phi> phiBlocks;
+    std::vector<Store> storeBlocks;
+    Id phiResultId = spv::NoResult; // Only valid if !phiBlocks.empty() after applying the emrge
+    bool isDirty;
+  };
+
+  std::map<const VarDecl*, MergedVariable> mergedVariables;
+  spv::Block* mergeBlock;
+};
+
+////////////////////////////////////////////////////////////////////////////////
 // VariablesStack
 //
 
@@ -200,29 +232,33 @@ public:
   // Find the value of the variable *before* entering the given loop.
   Id findPreLoopValue(const VarDecl* decl, LoopMergeContext& loop);
 
-  // Merge the variables coming from control flow blocks and insert
-  // OpPhi instructions at the beginning of the merge block ot stores in the
-  // preceding blocks. When called the top variable block must be the one
-  // immediately dominating all blocks in the given range.
+  // Analyse the control flow coming to the mergeBlock and buld up a
+  // MergeResult structure containing information about how each active variable
+  // should be merged.
   //
-  // If "loop" is set then this merges "continue" blocks into a loop header
-  // and variables are incorporated into the loop rewrite mechanic as necessary.
+  // This does not emit any instructions.
   template<class Iter>
-  void merge(Iter first, Iter last, spv::Block* mergeBlock, LoopMergeContext* loop = nullptr);
+  MergeResult resolveMerge(Iter first, Iter last, spv::Block* mergeBlock);
+  // Given a MergeResult object emit the instrucitons applying
+  // the necessary changes in the associated merge block.
+  //
+  // If the merge result contains any phi resolutions store the
+  // Result<id> generated for the associated OpPhi instruction in the object.
+  void applyMergeResult(MergeResult& merge);
+  void applyMergeResult(MergeResult&& merge) { return applyMergeResult(merge); }
 
 private:
   using Stack = llvm::SmallVector<BlockVariables, 8>;
   static void sort(BlockVariables& blockVars);
-  static void storeIfDirty(Variable& var, spv::Block* block);
+  static bool shouldStoreIfDirty(const Variable& var);
 
-  Id load(const VarDecl& decl);
-  Variable& find(const VarDecl* decl);
-  Variable* tryFind(const VarDecl* decl);
-  Variable* tryFindInTop(const VarDecl* decl);
-  Variable* tryFindInStackBelowTop(const VarDecl* decl);
-  Variable* tryFindInStack(Stack::reverse_iterator start, const VarDecl* decl);
-  void storeIfDirty(Variable& var);
-  BlockVariables& top() { return _stack.back(); }
+  auto load(const VarDecl& decl) -> Id;
+  auto find(const VarDecl* decl) -> Variable&;
+  auto tryFind(const VarDecl* decl) -> Variable*;
+  auto tryFindInTop(const VarDecl* decl) -> Variable*;
+  auto tryFindInStackBelowTop(const VarDecl* decl) -> Variable*;
+  auto tryFindInStack(Stack::reverse_iterator start, const VarDecl* decl) -> Variable*;
+  auto top() -> BlockVariables& { return _stack.back(); }
 
   TypeCache& _types;
   spv::Builder& _builder;
@@ -238,18 +274,14 @@ class clang::lava::spirv::LoopMergeContext
 {
 public:
   template<class F>
-  LoopMergeContext(spv::Builder& builder, VariablesStack& vars, LoopMergeContext* parent, F incDirector);
+  LoopMergeContext(spv::Block* preheader, VariablesStack& vars, LoopMergeContext* parent, F incDirector);
 
   void addBreakBlock(BlockVariables block);
   void addContinueBlock(BlockVariables block);
   void setHeaderBlock(BlockVariables block);
-  //
   void addRewriteCandidate(const VarDecl* decl, Id operand, spv::Block* block);
-  void setRewriteId(const VarDecl* decl, Id rewriteId);
-  void applyRewrites();
 
-  void mergeContinueBlocks(spv::Block* testBlock);
-  void mergeBreakBlocks(spv::Block* mergeBlock);
+  void applyMerge(spv::Block* mergeBlock);
 
   LoopMergeContext* parent() const { return _parent; }
 
@@ -268,15 +300,17 @@ private:
     Id rewriteId;
   };
 
+  void applyRewrites();
+  void mergeContinueBlocks();
+  void mergeBreakBlocks(spv::Block* mergeBlock);
   void rewriteInstruction(spv::Instruction* inst, Id oldId, Id newId);
-
-  VarInfo* tryFind(const VarDecl* decl);
+  void setRewriteId(const VarDecl* decl, Id rewriteId);
   void sort();
+  auto tryFind(const VarDecl* decl) -> VarInfo*;
 
   llvm::SmallVector<VarInfo, 4> _rewriteCandidates;
   llvm::SmallVector<BlockVariables, 4> _breakBlocks;
   llvm::SmallVector<BlockVariables, 4> _continueBlocks;
-  spv::Builder& _builder;
   spv::Block* _preheader;
   BlockVariables _headerBlock;
   LoopMergeContext* _parent;
