@@ -420,6 +420,7 @@ void spirv::VariablesStack::Merger::processVariable(Grouped::value_type& group,
           inst->addIdOperand(b->getId());
         }
       }
+      // TODO: Is this a redundant Phi?
       _mergeBlock->addInstructionAtFront(inst.get());
       if(loop)
       {
@@ -689,6 +690,20 @@ void spirv::VariablesStack::push(spv::Block* block, LoopMergeContext* loop)
   _stack.push_back({{}, block, loop});
 }
 
+spirv::Id spirv::VariablesStack::findPreLoopValue(const VarDecl* decl, LoopMergeContext& loop)
+{
+  auto it = std::find_if(_stack.rbegin(), _stack.rend(), [&loop] (const BlockVariables& block)
+                         {
+                           return block.loop != &loop;
+                         });
+  // The root block is never part of a loop
+  assert(it != _stack.rend());
+  // Found the pre-header of the current loop, now figure out the value
+  // of the requested variable.
+  auto* var = tryFindInStack(it, decl);
+  return var ? var->value : spv::NoResult;
+}
+
 template<class Iter>
 void spirv::VariablesStack::merge(Iter first, Iter last, spv::Block* mergeBlock, LoopMergeContext* loop)
 {
@@ -754,10 +769,11 @@ void spirv::VariablesStack::sort(BlockVariables& blockVars)
 // LoopMergeContext
 //
 
-spirv::LoopMergeContext::LoopMergeContext(spv::Builder& builder, LoopMergeContext* parent)
+spirv::LoopMergeContext::LoopMergeContext(spv::Builder& builder, VariablesStack& vars, LoopMergeContext* parent)
 : _builder(builder)
-, _parent(parent)
 , _preheader(builder.getBuildPoint())
+, _parent(parent)
+, _vars(vars)
 {
 }
 
@@ -798,8 +814,15 @@ void spirv::LoopMergeContext::addRewriteCandidate(const VarDecl* decl, Id operan
   {
     // This is a new variable. Remember the block containing the consuming
     // instruction so it can be rewritten if required.
-    _rewriteCandidates.push_back({decl, {block}, operand, spv::NoResult});
-    sort();
+    // If the <id> is not the same as it was before the loop then the variable
+    // changed its value without being loaded (e.g. assigned a new value). In
+    // that case it is not a candidate for a rewrite.
+    auto preLoopValue = _vars.findPreLoopValue(decl, *this);
+    if(operand == preLoopValue)
+    {
+      _rewriteCandidates.push_back({decl, {block}, operand, spv::NoResult});
+      sort();
+    }
   }
 }
 
@@ -1192,17 +1215,17 @@ void spirv::LoopMergeContext::rewriteInstruction(spv::Instruction* inst, Id oldI
   llvm_unreachable("unknown opcode");
 }
 
-void spirv::LoopMergeContext::mergeContinueBlocks(VariablesStack& vars, spv::Block* testBlock)
+void spirv::LoopMergeContext::mergeContinueBlocks(spv::Block* testBlock)
 {
-  vars.merge(_continueBlocks.begin(), _continueBlocks.end(), testBlock, this);
+  _vars.merge(_continueBlocks.begin(), _continueBlocks.end(), testBlock, this);
 }
 
-void spirv::LoopMergeContext::mergeBreakBlocks(VariablesStack& vars, spv::Block* mergeBlock)
+void spirv::LoopMergeContext::mergeBreakBlocks(spv::Block* mergeBlock)
 {
   // The continue blocks have been merged by now so we can now treat the header
   // block like a regular break block.
   _breakBlocks.push_back(std::move(_headerBlock));
-  vars.merge(_breakBlocks.begin(), _breakBlocks.end(), mergeBlock, nullptr);
+  _vars.merge(_breakBlocks.begin(), _breakBlocks.end(), mergeBlock, nullptr);
 }
 
 spirv::LoopMergeContext::VarInfo* spirv::LoopMergeContext::tryFind(const VarDecl* decl)
@@ -1526,7 +1549,7 @@ bool spirv::FunctionBuilder::buildForStmt(bool hasCond,
   if(initDirector(*this))
   {
     _vars.setTopBlock(_builder.getBuildPoint());
-    LoopMergeContext loop{_builder, _loops.top()};
+    LoopMergeContext loop{_builder, _vars, _loops.top()};
     LoopStack::ScopedPush push{_loops, &loop};
 
     _builder.makeNewLoop(true);
@@ -1555,8 +1578,8 @@ bool spirv::FunctionBuilder::buildForStmt(bool hasCond,
         auto mergeBlock = _builder.getBuildPoint();
         loop.addContinueBlock(_vars.pop());
         loop.setHeaderBlock(_vars.pop());
-        loop.mergeContinueBlocks(_vars, testBlock);
-        loop.mergeBreakBlocks(_vars, mergeBlock);
+        loop.mergeContinueBlocks(testBlock);
+        loop.mergeBreakBlocks(mergeBlock);
         loop.applyRewrites();
         _vars.setTopBlock(mergeBlock);
         return true;
@@ -1740,7 +1763,7 @@ bool spirv::FunctionBuilder::buildSimpleLoopCommon(bool testFirst, F1 condDirect
   _vars.setTopBlock(preheaderBlock);
 
   StmtBuilder condStmt{_types, _vars};
-  LoopMergeContext loop{_builder, _loops.top()};
+  LoopMergeContext loop{_builder, _vars, _loops.top()};
   LoopStack::ScopedPush push{_loops, &loop};
 
   _builder.makeNewLoop(testFirst);
@@ -1759,8 +1782,8 @@ bool spirv::FunctionBuilder::buildSimpleLoopCommon(bool testFirst, F1 condDirect
       auto mergeBlock = _builder.getBuildPoint();
       loop.addContinueBlock(_vars.pop());
       loop.setHeaderBlock(_vars.pop());
-      loop.mergeContinueBlocks(_vars, headerBlock);
-      loop.mergeBreakBlocks(_vars, mergeBlock);
+      loop.mergeContinueBlocks(headerBlock);
+      loop.mergeBreakBlocks(mergeBlock);
       loop.applyRewrites();
       _vars.setTopBlock(mergeBlock);
       return true;

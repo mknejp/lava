@@ -191,6 +191,9 @@ public:
   void push(spv::Block* block, LoopMergeContext* loop);
   auto pop() -> BlockVariables;
 
+  // Find the value of the variable *before* entering the given loop.
+  Id findPreLoopValue(const VarDecl* decl, LoopMergeContext& loop);
+
   // Merge the variables coming from control flow blocks and insert
   // OpPhi instructions at the beginning of the merge block ot stores in the
   // preceding blocks. When called the top variable block must be the one
@@ -228,7 +231,7 @@ private:
 class clang::lava::spirv::LoopMergeContext
 {
 public:
-  LoopMergeContext(spv::Builder& builder, LoopMergeContext* parent);
+  LoopMergeContext(spv::Builder& builder, VariablesStack& vars, LoopMergeContext* parent);
 
   void addBreakBlock(BlockVariables block);
   void addContinueBlock(BlockVariables block);
@@ -238,8 +241,8 @@ public:
   void setRewriteId(const VarDecl* decl, Id rewriteId);
   void applyRewrites();
 
-  void mergeContinueBlocks(VariablesStack& vars, spv::Block* testBlock);
-  void mergeBreakBlocks(VariablesStack& vars, spv::Block* mergeBlock);
+  void mergeContinueBlocks(spv::Block* testBlock);
+  void mergeBreakBlocks(spv::Block* mergeBlock);
 
   LoopMergeContext* parent() const { return _parent; }
 
@@ -264,10 +267,11 @@ private:
   llvm::SmallVector<VarInfo, 4> _rewriteCandidates;
   llvm::SmallVector<BlockVariables, 4> _breakBlocks;
   llvm::SmallVector<BlockVariables, 4> _continueBlocks;
+  spv::Builder& _builder;
   spv::Block* _preheader;
   BlockVariables _headerBlock;
-  spv::Builder& _builder;
   LoopMergeContext* _parent;
+  VariablesStack& _vars;
 };
 
 ////////////////////////////////////////////////////////////////////////////////
