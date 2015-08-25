@@ -191,6 +191,12 @@ public:
   void push(spv::Block* block, LoopMergeContext* loop);
   auto pop() -> BlockVariables;
 
+  // Collapse all block variables associated to the current loop's variable
+  // stack into the top. This is necessary for continue/break that leave
+  // structured control flow so the top block has all the variable information
+  // necessary for merging.
+  void collapseLoopStackIntoTop();
+
   // Find the value of the variable *before* entering the given loop.
   Id findPreLoopValue(const VarDecl* decl, LoopMergeContext& loop);
 
@@ -231,7 +237,8 @@ private:
 class clang::lava::spirv::LoopMergeContext
 {
 public:
-  LoopMergeContext(spv::Builder& builder, VariablesStack& vars, LoopMergeContext* parent);
+  template<class F>
+  LoopMergeContext(spv::Builder& builder, VariablesStack& vars, LoopMergeContext* parent, F incDirector);
 
   void addBreakBlock(BlockVariables block);
   void addContinueBlock(BlockVariables block);
@@ -245,6 +252,8 @@ public:
   void mergeBreakBlocks(spv::Block* mergeBlock);
 
   LoopMergeContext* parent() const { return _parent; }
+
+  bool invokeIncDirector(FunctionBuilder& builder);
 
 private:
   struct VarInfo
@@ -272,6 +281,7 @@ private:
   BlockVariables _headerBlock;
   LoopMergeContext* _parent;
   VariablesStack& _vars;
+  std::function<bool(FunctionBuilder&)> _incDirector;
 };
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -351,6 +361,8 @@ public:
   FunctionBuilder(FunctionDecl& decl, TypeCache& types, TypeMangler& mangler);
 
   bool addParam(const ParmVarDecl& param);
+  template<class F>
+  bool buildContinueStmt(F&& cleanupDirector);
   template<class F1, class F2>
   bool buildDoStmt(F1 condDirector, F2 bodyDirector);
   template<class F1, class F2, class F3, class F4>

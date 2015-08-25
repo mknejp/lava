@@ -315,6 +315,17 @@ bool glsl::FunctionBuilder::addParam(const ParmVarDecl& param)
   return true;
 }
 
+template<class F>
+bool glsl::FunctionBuilder::buildContinueStmt(F&& cleanupDirector)
+{
+  if(cleanupDirector(*this))
+  {
+    _w << "continue;" << _w.endln();
+    return true;
+  }
+  return false;
+}
+
 template<class F1, class F2>
 bool glsl::FunctionBuilder::buildDoStmt(F1 condDirector, F2 bodyDirector)
 {

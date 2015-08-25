@@ -45,6 +45,7 @@ namespace
 
     // Statements
     void VisitCompoundStmt(const CompoundStmt* stmt);
+    void VisitContinueStmt(const ContinueStmt* stmt);
     void VisitDeclStmt(const DeclStmt* stmt);
     void VisitDoStmt(const DoStmt* stmt);
     void VisitForStmt(const ForStmt* stmt);
@@ -143,6 +144,14 @@ void FunctionVisitor::VisitCompoundStmt(const CompoundStmt* stmt)
     {
       FunctionVisitor{builder}.StmtVisitor::Visit(stmt);
     }
+  });
+}
+
+void FunctionVisitor::VisitContinueStmt(const ContinueStmt* stmt)
+{
+  _builder.buildContinueStmt([this] (FunctionBuilder& builder)
+  {
+    // TODO: local cleanup
   });
 }
 

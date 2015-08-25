@@ -239,7 +239,7 @@ Legend:
 | Statements | SPIR-V | GLSL | HLSL  | MetalSL |
 | ---------------- |:------:|:----:|:-----:|:-------:|
 | `break` | :x: | :x: | :x: | :x: |
-| `continue` | :x: | :x: | :x: | :x: |
+| `continue` | :white_check_mark: | :white_check_mark: | :x: | :x: |
 | `discard` | :x: | :x: | :x: | :x: |
 | `do` | :white_check_mark: | :white_check_mark: | :x: | :x: |
 | `for` | :white_check_mark: | :white_check_mark: | :x: | :x: |

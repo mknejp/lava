@@ -15,6 +15,7 @@
 #include "clang/AST/ExprCXX.h"
 #include "clang/Lava/ModuleBuilder.h"
 #include "clang/Lava/IndentWriter.h"
+#include <set>
 
 using namespace clang;
 using namespace lava;
@@ -690,6 +691,25 @@ void spirv::VariablesStack::push(spv::Block* block, LoopMergeContext* loop)
   _stack.push_back({{}, block, loop});
 }
 
+void spirv::VariablesStack::collapseLoopStackIntoTop()
+{
+  auto loop = top().loop;
+
+  auto variables = std::set<Variable>{};
+
+  for(auto it = _stack.rbegin(), end = _stack.rend();
+      it != end && loop == it->loop;
+      ++it)
+  {
+    for(auto& var : it->vars)
+    {
+      variables.insert(var);
+    }
+  }
+
+  top().vars.assign(variables.begin(), variables.end());
+}
+
 spirv::Id spirv::VariablesStack::findPreLoopValue(const VarDecl* decl, LoopMergeContext& loop)
 {
   auto it = std::find_if(_stack.rbegin(), _stack.rend(), [&loop] (const BlockVariables& block)
@@ -769,11 +789,14 @@ void spirv::VariablesStack::sort(BlockVariables& blockVars)
 // LoopMergeContext
 //
 
-spirv::LoopMergeContext::LoopMergeContext(spv::Builder& builder, VariablesStack& vars, LoopMergeContext* parent)
+template<class F>
+spirv::LoopMergeContext::LoopMergeContext(spv::Builder& builder, VariablesStack& vars,
+                                          LoopMergeContext* parent, F incDirector)
 : _builder(builder)
 , _preheader(builder.getBuildPoint())
 , _parent(parent)
 , _vars(vars)
+, _incDirector(std::move(incDirector))
 {
 }
 
@@ -1228,6 +1251,11 @@ void spirv::LoopMergeContext::mergeBreakBlocks(spv::Block* mergeBlock)
   _vars.merge(_breakBlocks.begin(), _breakBlocks.end(), mergeBlock, nullptr);
 }
 
+bool spirv::LoopMergeContext::invokeIncDirector(FunctionBuilder& builder)
+{
+  return !_incDirector || _incDirector(builder);
+}
+
 spirv::LoopMergeContext::VarInfo* spirv::LoopMergeContext::tryFind(const VarDecl* decl)
 {
   struct Comp
@@ -1541,6 +1569,20 @@ bool spirv::FunctionBuilder::buildDoStmt(F1 condDirector, F2 bodyDirector)
   return buildSimpleLoopCommon(false, std::move(condDirector), std::move(bodyDirector));
 }
 
+template<class F>
+bool spirv::FunctionBuilder::buildContinueStmt(F&& cleanupDirector)
+{
+  if(cleanupDirector(*this))
+  {
+    _loops.top()->invokeIncDirector(*this);
+    _vars.collapseLoopStackIntoTop();
+    _loops.top()->addContinueBlock(_vars.extractTop());
+    _builder.createLoopContinue();
+    return true;
+  }
+  return false;
+}
+
 template<class F1, class F2, class F3, class F4>
 bool spirv::FunctionBuilder::buildForStmt(bool hasCond,
                                           F1 initDirector, F2 condDirector,
@@ -1549,7 +1591,11 @@ bool spirv::FunctionBuilder::buildForStmt(bool hasCond,
   if(initDirector(*this))
   {
     _vars.setTopBlock(_builder.getBuildPoint());
-    LoopMergeContext loop{_builder, _vars, _loops.top()};
+    LoopMergeContext loop{_builder, _vars, _loops.top(), [incDirector] (FunctionBuilder& builder)
+    {
+      StmtBuilder incStmt{builder._types, builder._vars};
+      return incDirector(incStmt);
+    }};
     LoopStack::ScopedPush push{_loops, &loop};
 
     _builder.makeNewLoop(true);
@@ -1570,12 +1616,12 @@ bool spirv::FunctionBuilder::buildForStmt(bool hasCond,
     _vars.push(bodyBlock, &loop);
     if(bodyDirector(*this))
     {
-      // TODO: remember continue director for ContinueStmt
       StmtBuilder incStmt{_types, _vars};
       if(incDirector(incStmt))
       {
         _builder.closeLoop();
         auto mergeBlock = _builder.getBuildPoint();
+        _vars.collapseLoopStackIntoTop();
         loop.addContinueBlock(_vars.pop());
         loop.setHeaderBlock(_vars.pop());
         loop.mergeContinueBlocks(testBlock);
@@ -1763,7 +1809,7 @@ bool spirv::FunctionBuilder::buildSimpleLoopCommon(bool testFirst, F1 condDirect
   _vars.setTopBlock(preheaderBlock);
 
   StmtBuilder condStmt{_types, _vars};
-  LoopMergeContext loop{_builder, _vars, _loops.top()};
+  LoopMergeContext loop{_builder, _vars, _loops.top(), nullptr};
   LoopStack::ScopedPush push{_loops, &loop};
 
   _builder.makeNewLoop(testFirst);
@@ -1780,6 +1826,7 @@ bool spirv::FunctionBuilder::buildSimpleLoopCommon(bool testFirst, F1 condDirect
     {
       _builder.closeLoop();
       auto mergeBlock = _builder.getBuildPoint();
+      _vars.collapseLoopStackIntoTop();
       loop.addContinueBlock(_vars.pop());
       loop.setHeaderBlock(_vars.pop());
       loop.mergeContinueBlocks(headerBlock);
