@@ -44,6 +44,7 @@ namespace
     FunctionVisitor(FunctionBuilder& builder) : _builder(builder) { }
 
     // Statements
+    void VisitBreakStmt(const BreakStmt* stmt);
     void VisitCompoundStmt(const CompoundStmt* stmt);
     void VisitContinueStmt(const ContinueStmt* stmt);
     void VisitDeclStmt(const DeclStmt* stmt);
@@ -135,6 +136,14 @@ namespace
 ////////////////////////////////////////////////////////////////////////////////
 // FunctionVisitor
 //
+
+void FunctionVisitor::VisitBreakStmt(const BreakStmt* stmt)
+{
+  _builder.buildBreakStmt([this] (FunctionBuilder& builder)
+  {
+    // TODO: local cleanup
+  });
+}
 
 void FunctionVisitor::VisitCompoundStmt(const CompoundStmt* stmt)
 {

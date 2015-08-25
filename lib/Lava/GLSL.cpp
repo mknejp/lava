@@ -316,6 +316,17 @@ bool glsl::FunctionBuilder::addParam(const ParmVarDecl& param)
 }
 
 template<class F>
+bool glsl::FunctionBuilder::buildBreakStmt(F&& cleanupDirector)
+{
+  if(cleanupDirector(*this))
+  {
+    _w << "break;" << _w.endln();
+    return true;
+  }
+  return false;
+}
+
+template<class F>
 bool glsl::FunctionBuilder::buildContinueStmt(F&& cleanupDirector)
 {
   if(cleanupDirector(*this))

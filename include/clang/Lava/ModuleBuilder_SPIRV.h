@@ -396,6 +396,8 @@ public:
 
   bool addParam(const ParmVarDecl& param);
   template<class F>
+  bool buildBreakStmt(F&& cleanupDirector);
+  template<class F>
   bool buildContinueStmt(F&& cleanupDirector);
   template<class F1, class F2>
   bool buildDoStmt(F1 condDirector, F2 bodyDirector);

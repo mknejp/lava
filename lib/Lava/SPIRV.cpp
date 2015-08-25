@@ -1605,6 +1605,19 @@ bool spirv::FunctionBuilder::addParam(const ParmVarDecl& param)
 }
 
 template<class F>
+bool spirv::FunctionBuilder::buildBreakStmt(F&& cleanupDirector)
+{
+  if(cleanupDirector(*this))
+  {
+    _vars.collapseLoopStackIntoTop();
+    _loops.top()->addBreakBlock(_vars.extractTop());
+    _builder.createLoopExit();
+    return true;
+  }
+  return false;
+}
+
+template<class F>
 bool spirv::FunctionBuilder::buildContinueStmt(F&& cleanupDirector)
 {
   if(cleanupDirector(*this))

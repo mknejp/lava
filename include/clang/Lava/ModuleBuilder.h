@@ -276,6 +276,14 @@ public:
   /// \name Concent building
   /// @{
 
+  /// Build a break statement for either a loop of a swith.
+  /// \param cleanup A function director responsible for generating cleanup code. It is called at a point where cleanup calls are allowed in the target language.
+  template<class F>
+  bool buildBreakStmt(F&& cleanup)
+  {
+    auto f = Director{std::forward<F>(cleanup)};
+    return _success = _success && buildBreakStmtImpl(f);
+  }
   /// Build a continue statement.
   /// \param cleanup A function director responsible for generating cleanup code. It is called at a point where cleanup calls are allowed in the target language.
   template<class F>
@@ -400,6 +408,7 @@ private:
   bool success() const { return _success; }
 
   virtual bool addParamImpl(const ParmVarDecl& param) = 0;
+  virtual bool buildBreakStmtImpl(Director& cleanup) = 0;
   virtual bool buildContinueStmtImpl(Director& cleanup) = 0;
   virtual bool buildDoStmtImpl(StmtDirector& cond, Director& body) = 0;
   virtual bool buildForStmtImpl(bool hasCond, Director& init, StmtDirector& cond,
@@ -429,6 +438,10 @@ private:
   bool addParamImpl(const ParmVarDecl& param) override
   {
     return _target.addParam(param);
+  }
+  bool buildBreakStmtImpl(Director& cleanup) override
+  {
+    return _target.buildBreakStmt(DirectorInvoker<T, FunctionBuilder>{_target, cleanup});
   }
   bool buildContinueStmtImpl(Director& cleanup) override
   {
