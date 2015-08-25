@@ -45,6 +45,10 @@ namespace clang
       class VariablesStack;
 
       using Id = ::spv::Id;
+
+      constexpr bool operator<(const spirv::Variable& a, const spirv::Variable& b);
+      constexpr bool operator<(const VarDecl* decl, const spirv::Variable& var);
+      constexpr bool operator<(const spirv::Variable& var, const VarDecl* decl);
     }
   }
 }
@@ -185,8 +189,7 @@ public:
   // thus making it not participate in merges.
   auto extractTop() -> BlockVariables;
   void push(spv::Block* block, LoopMergeContext* loop);
-  void pop() { _stack.pop_back(); }
-  auto popAndGet() -> BlockVariables;
+  auto pop() -> BlockVariables;
 
   // Merge the variables coming from control flow blocks and insert
   // OpPhi instructions at the beginning of the merge block ot stores in the
@@ -199,6 +202,7 @@ public:
   void merge(Iter first, Iter last, spv::Block* mergeBlock, LoopMergeContext* loop = nullptr);
 
 private:
+  using Stack = llvm::SmallVector<BlockVariables, 8>;
   static void sort(BlockVariables& blockVars);
   static void storeIfDirty(Variable& var, spv::Block* block);
 
@@ -207,13 +211,14 @@ private:
   Variable* tryFind(const VarDecl* decl);
   Variable* tryFindInTop(const VarDecl* decl);
   Variable* tryFindInStackBelowTop(const VarDecl* decl);
+  Variable* tryFindInStack(Stack::reverse_iterator start, const VarDecl* decl);
   void storeIfDirty(Variable& var);
   BlockVariables& top() { return _stack.back(); }
 
   TypeCache& _types;
   spv::Builder& _builder;
   const VarDecl* _initing = nullptr;
-  llvm::SmallVector<BlockVariables, 8> _stack;
+  Stack _stack;
 };
 
 ////////////////////////////////////////////////////////////////////////////////

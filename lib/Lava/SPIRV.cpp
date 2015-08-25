@@ -249,6 +249,23 @@ Id spirv::RecordBuilder::finalize()
 }
 
 ////////////////////////////////////////////////////////////////////////////////
+// Variable
+//
+
+constexpr bool spirv::operator<(const spirv::Variable& a, const spirv::Variable& b)
+{
+  return a.decl < b.decl;
+}
+constexpr bool spirv::operator<(const VarDecl* decl, const spirv::Variable& var)
+{
+  return decl < var.decl;
+}
+constexpr bool spirv::operator<(const spirv::Variable& var, const VarDecl* decl)
+{
+  return var.decl < decl;
+}
+
+////////////////////////////////////////////////////////////////////////////////
 // BlockVariables
 //
 
@@ -259,8 +276,8 @@ namespace
     using namespace spirv;
     struct Comp
     {
-      bool operator()(const VarDecl* decl, const Variable& var) const { return var.decl < decl; }
-      bool operator()(const Variable& var, const VarDecl* decl) const { return var.decl < decl; }
+      bool operator()(const VarDecl* decl, const Variable& var) const { return decl < var; }
+      bool operator()(const Variable& var, const VarDecl* decl) const { return var < decl; }
     };
     auto it = std::lower_bound(blockVars.vars.begin(), blockVars.vars.end(), decl, Comp{});
     return it == blockVars.vars.end() ? nullptr : (it->decl == decl ? &*it : nullptr);
@@ -522,10 +539,21 @@ spirv::ExprResult spirv::VariablesStack::store(const ExprResult& target, Id valu
   // TODO: composite access chains
   if(target.variable)
   {
+    auto copy = [this, value]
+    {
+      // If the RHS is a constant we have to create a copy to avoid
+      // self-referencing in operations with constant operands of the same value.
+      // This also gives every local variable a unique <id> to start with.
+      // Also avoids aliasing of two variables for the same reason.
+      // TODO: references
+      return isConstOrSpec(_builder, value) ? _builder.createCopyObject(value) : value;
+    };
+
     if(_initing == target.variable)
     {
       // A local variable is being initialized with its first value.
       _initing = nullptr;
+      value = copy();
       trackVariable(*target.variable, value);
       return {value, target.variable, {}};
     }
@@ -541,9 +569,9 @@ spirv::ExprResult spirv::VariablesStack::store(const ExprResult& target, Id valu
     }
     else
     {
-      var.value = value;
+      var.value = copy();
       var.isDirty = true;
-      return {value, target.variable, {}};
+      return {var.value, target.variable, {}};
     }
   }
   llvm_unreachable("assigning to temporary");
@@ -560,10 +588,7 @@ spirv::ExprResult spirv::VariablesStack::store(const ExprResult& target,
   if(!target.variable)
     llvm_unreachable("assigning to temporary");
 
-  // If the RHS is a constant we have to create a copy to avoid
-  // self-referencing in operations with constant operands of the same value.
-  // This also gives every local variable a unique <id> to start with.
-  // Also avoid aliasing of two variables for the same reason.
+  // If we are assigning from a variable we have to create a copy to avoid aliasing.
   // TODO: references
   if(source.variable)
   {
@@ -586,10 +611,6 @@ spirv::ExprResult spirv::VariablesStack::store(const ExprResult& target,
     {
       return target;
     }
-  }
-  else if(isConstOrSpec(_builder, source.value))
-  {
-    return store(target, _builder.createCopyObject(source.value));
   }
   return store(target, source.value);
 }
@@ -656,10 +677,10 @@ spirv::BlockVariables spirv::VariablesStack::extractTop()
   return temp;
 }
 
-spirv::BlockVariables spirv::VariablesStack::popAndGet()
+spirv::BlockVariables spirv::VariablesStack::pop()
 {
   auto result = std::move(top());
-  pop();
+  _stack.pop_back();
   return result;
 }
 
@@ -703,15 +724,17 @@ spirv::Variable* spirv::VariablesStack::tryFindInStackBelowTop(const VarDecl* de
 {
   // Ignore the top element since we need to distinguish between
   // finding the element in the top or somewhere lower.
+  return _stack.size() > 1 ? tryFindInStack(++_stack.rbegin(), decl) : nullptr;
+}
+
+spirv::Variable* spirv::VariablesStack::tryFindInStack(Stack::reverse_iterator start, const VarDecl* decl)
+{
   spirv::Variable* result = nullptr;
-  if(_stack.size() > 1)
-  {
-    std::find_if(++_stack.rbegin(), _stack.rend(), [decl, &result] (BlockVariables& blockVars)
-                 {
-                   result = ::tryFind(decl, blockVars);
-                   return result != nullptr;
-                 });
-  }
+  std::find_if(start, _stack.rend(), [decl, &result] (BlockVariables& blockVars)
+               {
+                 result = ::tryFind(decl, blockVars);
+                 return result != nullptr;
+               });
   return result;
 }
 
@@ -1519,11 +1542,10 @@ bool spirv::FunctionBuilder::buildForStmt(bool hasCond,
       StmtBuilder incStmt{_types, _vars};
       if(incDirector(incStmt))
       {
-
         _builder.closeLoop();
         auto mergeBlock = _builder.getBuildPoint();
-        loop.addContinueBlock(_vars.popAndGet());
-        loop.setHeaderBlock(_vars.popAndGet());
+        loop.addContinueBlock(_vars.pop());
+        loop.setHeaderBlock(_vars.pop());
         loop.mergeContinueBlocks(_vars, testBlock);
         loop.mergeBreakBlocks(_vars, mergeBlock);
         loop.applyRewrites();
@@ -1549,7 +1571,7 @@ bool spirv::FunctionBuilder::buildIfStmt(F1 condDirector, F2 thenDirector)
     if(thenDirector(*this))
     {
       ifBuilder.makeEndIf();
-      auto thenVars = _vars.popAndGet();
+      auto thenVars = _vars.pop();
 
       _vars.merge(&thenVars, &thenVars + 1, _builder.getBuildPoint());
       _vars.setTopBlock(_builder.getBuildPoint());
@@ -1575,14 +1597,14 @@ bool spirv::FunctionBuilder::buildIfStmt(F1 condDirector, F2 thenDirector, F3 el
     _vars.push(_builder.getBuildPoint(), _loops.top());
     if(thenDirector(*this))
     {
-      blockVars.push_back(_vars.popAndGet());
+      blockVars.push_back(_vars.pop());
       ifBuilder.makeBeginElse();
 
       _vars.push(_builder.getBuildPoint(), _loops.top());
       if(elseDirector(*this))
       {
         ifBuilder.makeEndIf();
-        blockVars.push_back(_vars.popAndGet());
+        blockVars.push_back(_vars.pop());
 
         _vars.merge(blockVars.begin(), blockVars.end(), _builder.getBuildPoint());
         _vars.setTopBlock(_builder.getBuildPoint());
@@ -1726,8 +1748,8 @@ bool spirv::FunctionBuilder::buildSimpleLoopCommon(bool testFirst, F1 condDirect
     {
       _builder.closeLoop();
       auto mergeBlock = _builder.getBuildPoint();
-      loop.addContinueBlock(_vars.popAndGet());
-      loop.setHeaderBlock(_vars.popAndGet());
+      loop.addContinueBlock(_vars.pop());
+      loop.setHeaderBlock(_vars.pop());
       loop.mergeContinueBlocks(_vars, headerBlock);
       loop.mergeBreakBlocks(_vars, mergeBlock);
       loop.applyRewrites();
