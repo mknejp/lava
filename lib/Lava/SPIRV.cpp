@@ -1457,7 +1457,7 @@ bool spirv::StmtBuilder::emitIntegerLiteral(const IntegerLiteral& expr)
       llvm_unreachable("int64 not yet implemented");
     case BuiltinType::ULong:
     case BuiltinType::ULongLong:
-      // TODO: int64
+      // TODO: uint64
       llvm_unreachable("uint64 not yet implemented");
     default:
       llvm_unreachable("invalid type for integer literal");

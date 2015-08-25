@@ -93,7 +93,7 @@ public:
   template<class F>
   bool emitCast(const CastExpr& expr, F subexpr);
   bool emitFloatingLiteral(const FloatingLiteral& expr);
-  bool emitIntegerLiteral(const IntegerLiteral& literal);
+  bool emitIntegerLiteral(const IntegerLiteral& expr);
   template<class F>
   bool emitParenExpr(F subexpr);
   template<class F>

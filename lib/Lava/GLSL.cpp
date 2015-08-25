@@ -259,9 +259,28 @@ bool glsl::StmtBuilder::emitFloatingLiteral(const FloatingLiteral& expr)
   return true;
 }
 
-bool glsl::StmtBuilder::emitIntegerLiteral(const IntegerLiteral& literal)
+bool glsl::StmtBuilder::emitIntegerLiteral(const IntegerLiteral& expr)
 {
-  literal.getValue().print(_w.ostreamWithIndent(), false);
+  expr.getValue().print(_w.ostreamWithIndent(), false);
+  auto type = expr.getType();
+  switch(type->getAs<BuiltinType>()->getKind())
+  {
+    case BuiltinType::Int:
+      break;
+    case BuiltinType::UInt:
+      _w << 'u';
+      break;
+    case BuiltinType::Long:
+    case BuiltinType::LongLong:
+      // TODO: int64
+      llvm_unreachable("int64 not yet implemented");
+    case BuiltinType::ULong:
+    case BuiltinType::ULongLong:
+      // TODO: uint64
+      llvm_unreachable("uint64 not yet implemented");
+    default:
+      llvm_unreachable("invalid type for integer literal");
+  }
   return true;
 }
 
