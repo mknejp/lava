@@ -1356,10 +1356,17 @@ bool spirv::StmtBuilder::emitIntegerLiteral(const IntegerLiteral& expr)
     case BuiltinType::Int:
       _subexpr.value = _builder.makeIntConstant(static_cast<int>(value));
       break;
+    case BuiltinType::UInt:
+      _subexpr.value = _builder.makeUintConstant(static_cast<unsigned int>(value));
+      break;
     case BuiltinType::Long:
     case BuiltinType::LongLong:
       // TODO: int64
       llvm_unreachable("int64 not yet implemented");
+    case BuiltinType::ULong:
+    case BuiltinType::ULongLong:
+      // TODO: int64
+      llvm_unreachable("uint64 not yet implemented");
     default:
       llvm_unreachable("invalid type for integer literal");
   }
