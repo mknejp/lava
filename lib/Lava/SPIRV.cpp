@@ -1258,8 +1258,10 @@ bool spirv::StmtBuilder::emitBinaryOperator(const BinaryOperator& expr, RHS lhs,
     if(rhs(*this))
     {
       auto type = expr.getType();
-      auto floating = type->isFloatingType();
-      auto sign = type->isSignedIntegerOrEnumerationType();
+      // The children of a BinaryOperator always have the same types
+      // so it's enough to only check one.
+      auto floating = expr.getLHS()->getType()->isFloatingType();
+      auto sign = expr.getLHS()->getType()->isSignedIntegerOrEnumerationType();
       switch(expr.getOpcode())
       {
         case BO_MulAssign:
