@@ -141,7 +141,7 @@ This overview represents the capabilities of the frontend and code genrators and
 ### C++ frontend status
 These are the changes planned for the frontend to support all the stuff for graphics programming.
 I have investigated the Clang code some of them but most are here only for reference.
-- [ ] Disable language features that are not supported by any code generator or backend
+- [ ] Disable or adjust language features that are not supported (directly) by any code generator or backend
   - [x] Exceptions
   - [x] RTTI
   - [ ] `virtual`
@@ -155,8 +155,11 @@ I have investigated the Clang code some of them but most are here only for refer
   - [ ] *const_cast*
   - [ ] *reinterpret_cast*
   - [ ] Reference captures in closures: Neither GLSL nor SPIR-V in the logical memory model allow pointers/references as structure members. This rule *might* be relaxed in function-local lambdas since they are most likely inlining candidates.
+  - [ ] Character literals: Could be translated to integer literals.
+  - [ ] String literals: Could be translated to constant integer arrays.
+  - [ ] Nested switch cases: C++ allows the `case` statement to be placed within nested control flow. GLSL does not and SPIR-V forbids branching into control flow structures.
 - [ ] Vectors
-  - [x] Dedicated matrix types: Clang already has `__attribute((ext_vector_type))` that we can re-use.
+  - [x] Dedicated vector types: Clang already has `__attribute((ext_vector_type))` that we can re-use.
   - [ ] GLSL-style initialization from other vectors `vec4(v1, v2)`: This isn't working properly yet, but there seems to be some special case code for OpenCL that should be examined.
   - [ ] Arithmetic operations with scalars/matrices
   - [x] swizzling: already supported for `__attribute((ext_vector_type))`
@@ -238,7 +241,7 @@ Legend:
 
 | Statements | SPIR-V | GLSL | HLSL  | MetalSL |
 | ---------------- |:------:|:----:|:-----:|:-------:|
-| `break` | :x: | :x: | :x: | :x: |
+| `break` | :warning: (loops only) | :white_check_mark: | :x: | :x: |
 | `continue` | :white_check_mark: | :white_check_mark: | :x: | :x: |
 | `discard` | :x: | :x: | :x: | :x: |
 | `do` | :white_check_mark: | :white_check_mark: | :x: | :x: |
