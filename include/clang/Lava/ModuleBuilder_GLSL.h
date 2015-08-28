@@ -129,6 +129,10 @@ public:
   template<class F>
   bool buildStmt(F exprDirector);
   template<class F1, class F2>
+  bool buildSwitchStmt(F1 condDirector, F2 bodyDirector);
+  bool buildSwitchCaseStmt(llvm::APSInt value);
+  bool buildSwitchDefaultStmt();
+  template<class F1, class F2>
   bool buildWhileStmt(F1 condDirector, F2 bodyDirector);
   bool declareUndefinedVar(const VarDecl& var);
   template<class F>

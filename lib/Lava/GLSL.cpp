@@ -463,6 +463,33 @@ bool glsl::FunctionBuilder::buildStmt(F stmtDirector)
 }
 
 template<class F1, class F2>
+bool glsl::FunctionBuilder::buildSwitchStmt(F1 condDirector, F2 bodyDirector)
+{
+  StmtBuilder stmt{_typeNamePrinter, _w};
+  _w << "switch(";
+  if(condDirector(stmt))
+  {
+    _w << ')' << _w.endln();
+    return bodyDirector(*this);
+  }
+  return false;
+}
+
+bool glsl::FunctionBuilder::buildSwitchCaseStmt(llvm::APSInt value)
+{
+  IndentWriter::PushOutdent out{_w};
+  _w << "case " << value << ':' << _w.endln();
+  return true;
+}
+
+bool glsl::FunctionBuilder::buildSwitchDefaultStmt()
+{
+  IndentWriter::PushOutdent out{_w};
+  _w << "default:" << _w.endln();
+  return true;
+}
+
+template<class F1, class F2>
 bool glsl::FunctionBuilder::buildWhileStmt(F1 condDirector, F2 bodyDirector)
 {
   StmtBuilder condStmt{_typeNamePrinter, _w};

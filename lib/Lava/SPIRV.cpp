@@ -458,7 +458,7 @@ spirv::VariablesStack::VariablesStack(TypeCache& types, spv::Builder& builder, s
 : _types(types)
 , _builder(builder)
 {
-  push(block, nullptr);
+  push(block, nullptr, nullptr);
 }
 
 Id spirv::VariablesStack::initUndefined(const VarDecl* decl)
@@ -651,19 +651,30 @@ spirv::BlockVariables spirv::VariablesStack::pop()
   return result;
 }
 
-void spirv::VariablesStack::push(spv::Block* block, LoopMergeContext* loop)
+void spirv::VariablesStack::push(spv::Block* block, LoopContext* loop, SwitchContext* switsh)
 {
-  _stack.push_back({{}, block, loop});
+  _stack.push_back({{}, block, loop, switsh});
 }
 
 void spirv::VariablesStack::collapseLoopStackIntoTop()
 {
   auto loop = top().loop;
+  collapseStackIntoTop([loop] (const BlockVariables& block) { return block.loop == loop; });
+}
 
+void spirv::VariablesStack::collapseSwitchStackIntoTop()
+{
+  auto switsh = top().switsh;
+  collapseStackIntoTop([switsh] (const BlockVariables& block) { return block.switsh == switsh; });
+}
+
+template<class F>
+void spirv::VariablesStack::collapseStackIntoTop(F predicate)
+{
   auto variables = std::set<Variable>{};
 
   for(auto it = _stack.rbegin(), end = _stack.rend();
-      it != end && loop == it->loop;
+      it != end && predicate(*it);
       ++it)
   {
     for(auto& var : it->vars)
@@ -675,7 +686,7 @@ void spirv::VariablesStack::collapseLoopStackIntoTop()
   top().vars.assign(variables.begin(), variables.end());
 }
 
-spirv::Id spirv::VariablesStack::findPreLoopValue(const VarDecl* decl, LoopMergeContext& loop)
+spirv::Id spirv::VariablesStack::findPreLoopValue(const VarDecl* decl, LoopContext& loop)
 {
   auto it = std::find_if(_stack.rbegin(), _stack.rend(), [&loop] (const BlockVariables& block)
                          {
@@ -785,12 +796,12 @@ void spirv::VariablesStack::sort(BlockVariables& blockVars)
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-// LoopMergeContext
+// LoopContext
 //
 
 template<class F>
-spirv::LoopMergeContext::LoopMergeContext(spv::Block* preheader, VariablesStack& vars,
-                                          LoopMergeContext* parent, F incDirector)
+spirv::LoopContext::LoopContext(spv::Block* preheader, VariablesStack& vars,
+                                          LoopContext* parent, F incDirector)
 : _preheader(preheader)
 , _parent(parent)
 , _vars(vars)
@@ -798,22 +809,22 @@ spirv::LoopMergeContext::LoopMergeContext(spv::Block* preheader, VariablesStack&
 {
 }
 
-void spirv::LoopMergeContext::addBreakBlock(BlockVariables block)
+void spirv::LoopContext::addBreakBlock(BlockVariables block)
 {
   _breakBlocks.push_back(std::move(block));
 }
 
-void spirv::LoopMergeContext::addContinueBlock(BlockVariables block)
+void spirv::LoopContext::addContinueBlock(BlockVariables block)
 {
   _continueBlocks.push_back(std::move(block));
 }
 
-void spirv::LoopMergeContext::setHeaderBlock(BlockVariables block)
+void spirv::LoopContext::setHeaderBlock(BlockVariables block)
 {
   _headerBlock = std::move(block);
 }
 
-void spirv::LoopMergeContext::addRewriteCandidate(const VarDecl* decl, Id operand, spv::Block* block)
+void spirv::LoopContext::addRewriteCandidate(const VarDecl* decl, Id operand, spv::Block* block)
 {
   VarInfo* entry = tryFind(decl);
   if(entry)
@@ -847,14 +858,14 @@ void spirv::LoopMergeContext::addRewriteCandidate(const VarDecl* decl, Id operan
   }
 }
 
-void spirv::LoopMergeContext::applyMerge(spv::Block* mergeBlock)
+void spirv::LoopContext::applyMerge(spv::Block* mergeBlock)
 {
   mergeContinueBlocks();
   mergeBreakBlocks(mergeBlock);
   applyRewrites();
 }
 
-void spirv::LoopMergeContext::setRewriteId(const VarDecl* decl, Id rewriteId)
+void spirv::LoopContext::setRewriteId(const VarDecl* decl, Id rewriteId)
 {
   VarInfo* entry = tryFind(decl);
   if(entry)
@@ -875,7 +886,7 @@ void spirv::LoopMergeContext::setRewriteId(const VarDecl* decl, Id rewriteId)
   }
 }
 
-void spirv::LoopMergeContext::applyRewrites()
+void spirv::LoopContext::applyRewrites()
 {
   for(auto& rewrite : _rewriteCandidates)
   {
@@ -892,7 +903,7 @@ void spirv::LoopMergeContext::applyRewrites()
   }
 }
 
-void spirv::LoopMergeContext::rewriteInstruction(spv::Instruction* inst, Id oldId, Id rewriteId)
+void spirv::LoopContext::rewriteInstruction(spv::Instruction* inst, Id oldId, Id rewriteId)
 {
   auto rewrite = [inst, oldId, rewriteId] (std::initializer_list<unsigned int> indices)
   {
@@ -1243,7 +1254,7 @@ void spirv::LoopMergeContext::rewriteInstruction(spv::Instruction* inst, Id oldI
   llvm_unreachable("unknown opcode");
 }
 
-void spirv::LoopMergeContext::mergeContinueBlocks()
+void spirv::LoopContext::mergeContinueBlocks()
 {
   auto* headerBlock = _headerBlock.block;
   assert(headerBlock && "header block not set");
@@ -1270,7 +1281,7 @@ void spirv::LoopMergeContext::mergeContinueBlocks()
   }
 }
 
-void spirv::LoopMergeContext::mergeBreakBlocks(spv::Block* mergeBlock)
+void spirv::LoopContext::mergeBreakBlocks(spv::Block* mergeBlock)
 {
   // The continue blocks have been merged by now so we can now treat the header
   // block like a regular break block.
@@ -1292,12 +1303,12 @@ void spirv::LoopMergeContext::mergeBreakBlocks(spv::Block* mergeBlock)
   }
 }
 
-bool spirv::LoopMergeContext::invokeIncDirector(FunctionBuilder& builder)
+bool spirv::LoopContext::invokeIncDirector(FunctionBuilder& builder)
 {
   return !_incDirector || _incDirector(builder);
 }
 
-spirv::LoopMergeContext::VarInfo* spirv::LoopMergeContext::tryFind(const VarDecl* decl)
+spirv::LoopContext::VarInfo* spirv::LoopContext::tryFind(const VarDecl* decl)
 {
   struct Comp
   {
@@ -1308,7 +1319,7 @@ spirv::LoopMergeContext::VarInfo* spirv::LoopMergeContext::tryFind(const VarDecl
   return it == _rewriteCandidates.end() ? nullptr : (it->var == decl ? &*it : nullptr);
 }
 
-void spirv::LoopMergeContext::sort()
+void spirv::LoopContext::sort()
 {
   std::sort(_rewriteCandidates.begin(), _rewriteCandidates.end(), [] (const VarInfo& a, const VarInfo& b)
             {
@@ -1317,17 +1328,79 @@ void spirv::LoopMergeContext::sort()
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-// LoopStack
+// Switchcontext
 //
 
-class spirv::LoopStack::ScopedPush
+spirv::SwitchContext::SwitchContext(spv::Block* headerBlock, spv::Block* mergeBlock,
+                                    spv::Instruction* switchInst)
+: _headerBlock(headerBlock)
+, _mergeBlock(mergeBlock)
+, _switchInst(switchInst)
+{
+}
+
+void spirv::SwitchContext::addCase(std::uint32_t value, spv::Block* block)
+{
+  _switchInst->addImmediateOperand(value);
+  _switchInst->addIdOperand(block->getId());
+}
+
+void spirv::SwitchContext::setDefault(spv::Block* block)
+{
+  assert(_defaultBlock == spv::NoResult && "multiple default cases?");
+  _defaultBlock = block->getId();
+  _switchInst->rewriteOperand(spv::NoResult, _defaultBlock, 1);
+}
+
+void spirv::SwitchContext::addBreakBlock(BlockVariables block)
+{
+  _breakBlocks.push_back(std::move(block));
+}
+
+void spirv::SwitchContext::mergeBreakBlocks(VariablesStack& vars)
+{
+  vars.applyMergeResult(vars.resolveMerge(_breakBlocks.begin(), _breakBlocks.end(), _mergeBlock));
+}
+
+void spirv::SwitchContext::rememberPendingMerge(BlockVariables predecessor)
+{
+  assert(!_pendingMerge && "two merges pending at once!");
+  _pendingMerge = std::move(predecessor);
+}
+
+void spirv::SwitchContext::applyPendingMerge(VariablesStack& vars, spv::Block* targetBlock)
+{
+  if(_pendingMerge)
+  {
+    vars.setTopBlock(_headerBlock);
+    vars.applyMergeResult(vars.resolveMerge(&*_pendingMerge, &*_pendingMerge + 1, targetBlock));
+    vars.setTopBlock(targetBlock);
+    _pendingMerge.reset();
+  }
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// BreakStack
+//
+
+class spirv::BreakStack::PushLoopScoped
 {
 public:
-  ScopedPush(LoopStack& stack, LoopMergeContext* ctx) : _stack(stack) { _stack.push(ctx); }
-  ~ScopedPush() { _stack.pop(); }
+  PushLoopScoped(BreakStack& stack) : _stack(stack) { _stack.push(loopBreak); }
+  ~PushLoopScoped() { _stack.pop(); }
 
 private:
-  LoopStack& _stack;
+  BreakStack& _stack;
+};
+
+class spirv::BreakStack::PushSwitchScoped
+{
+public:
+  PushSwitchScoped(BreakStack& stack) : _stack(stack) { _stack.push(switchBreak); }
+  ~PushSwitchScoped() { _stack.pop(); }
+
+private:
+  BreakStack& _stack;
 };
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -1607,12 +1680,37 @@ bool spirv::FunctionBuilder::addParam(const ParmVarDecl& param)
 template<class F>
 bool spirv::FunctionBuilder::buildBreakStmt(F&& cleanupDirector)
 {
+  applyPendingSwitchMerge();
   if(cleanupDirector(*this))
   {
-    _vars.collapseLoopStackIntoTop();
-    _loops.top()->addBreakBlock(_vars.extractTop());
-    _builder.createLoopExit();
-    return true;
+    if(_breaks.isLoop())
+    {
+      _vars.collapseLoopStackIntoTop();
+      _loops.top()->addBreakBlock(_vars.extractTop());
+      _builder.createLoopExit();
+      return true;
+    }
+    else
+    {
+      auto* switsh = _switches.top();
+      _vars.collapseSwitchStackIntoTop();
+      switsh->addBreakBlock(_vars.extractTop());
+
+      auto branch = llvm::make_unique<spv::Instruction>(spv::OpBranch);
+      branch->addIdOperand(switsh->mergeBlock()->getId());
+      _builder.getBuildPoint()->addInstruction(branch.get());
+      _builder.getBuildPoint()->addSuccessor(switsh->mergeBlock());
+      switsh->mergeBlock()->addPredecessor(_builder.getBuildPoint());
+      branch.release();
+
+      // Add unreachable past-break block
+      auto block = llvm::make_unique<spv::Block>(_builder.getUniqueId(), _builder.getBuildPoint()->getParent());
+      block->setUnreachable();
+      _builder.getBuildPoint()->getParent().addBlock(block.get());
+      _builder.setBuildPoint(block.release());
+
+      return true;
+    }
   }
   return false;
 }
@@ -1620,6 +1718,7 @@ bool spirv::FunctionBuilder::buildBreakStmt(F&& cleanupDirector)
 template<class F>
 bool spirv::FunctionBuilder::buildContinueStmt(F&& cleanupDirector)
 {
+  applyPendingSwitchMerge();
   if(cleanupDirector(*this))
   {
     _loops.top()->invokeIncDirector(*this);
@@ -1634,6 +1733,7 @@ bool spirv::FunctionBuilder::buildContinueStmt(F&& cleanupDirector)
 template<class F1, class F2>
 bool spirv::FunctionBuilder::buildDoStmt(F1 condDirector, F2 bodyDirector)
 {
+  applyPendingSwitchMerge();
   return buildSimpleLoopCommon(false, std::move(condDirector), std::move(bodyDirector));
 }
 
@@ -1642,19 +1742,21 @@ bool spirv::FunctionBuilder::buildForStmt(bool hasCond,
                                           F1 initDirector, F2 condDirector,
                                           F3 incDirector, F4 bodyDirector)
 {
+  applyPendingSwitchMerge();
   if(initDirector(*this))
   {
     _vars.setTopBlock(_builder.getBuildPoint());
-    LoopMergeContext loop{_builder.getBuildPoint(), _vars, _loops.top(), [incDirector] (FunctionBuilder& builder)
+    LoopContext loop{_builder.getBuildPoint(), _vars, _loops.top(), [incDirector] (FunctionBuilder& builder)
     {
       StmtBuilder incStmt{builder._types, builder._vars};
       return incDirector(incStmt);
     }};
-    LoopStack::ScopedPush push{_loops, &loop};
+    LoopStack::PushScoped pushLoop{_loops, &loop};
+    BreakStack::PushLoopScoped pushBreak{_breaks};
 
     _builder.makeNewLoop(true);
     auto* testBlock = _builder.getBuildPoint();
-    _vars.push(testBlock, &loop);
+    pushBlockVars(testBlock);
     if(hasCond)
     {
       StmtBuilder condStmt{_types, _vars};
@@ -1667,7 +1769,7 @@ bool spirv::FunctionBuilder::buildForStmt(bool hasCond,
       _builder.createBranchToBody();
     }
     auto* bodyBlock = _builder.getBuildPoint();
-    _vars.push(bodyBlock, &loop);
+    pushBlockVars(bodyBlock);
     if(bodyDirector(*this))
     {
       StmtBuilder incStmt{_types, _vars};
@@ -1676,8 +1778,8 @@ bool spirv::FunctionBuilder::buildForStmt(bool hasCond,
         _builder.closeLoop();
         auto mergeBlock = _builder.getBuildPoint();
         _vars.collapseLoopStackIntoTop();
-        loop.addContinueBlock(_vars.pop());
-        loop.setHeaderBlock(_vars.pop());
+        loop.addContinueBlock(popBlockVars());
+        loop.setHeaderBlock(popBlockVars());
         loop.applyMerge(mergeBlock);
         _vars.setTopBlock(mergeBlock);
         return true;
@@ -1690,18 +1792,19 @@ bool spirv::FunctionBuilder::buildForStmt(bool hasCond,
 template<class F1, class F2>
 bool spirv::FunctionBuilder::buildIfStmt(F1 condDirector, F2 thenDirector)
 {
+  applyPendingSwitchMerge();
   StmtBuilder condStmt{_types, _vars};
   if(condDirector(condStmt))
   {
     _vars.setTopBlock(_builder.getBuildPoint());
 
     spv::Builder::If ifBuilder{load(condStmt.expr()), _builder};
-    _vars.push(_builder.getBuildPoint(), _loops.top());
+    pushBlockVars();
 
     if(thenDirector(*this))
     {
       ifBuilder.makeEndIf();
-      auto thenVars = _vars.pop();
+      auto thenVars = popBlockVars();
 
       _vars.applyMergeResult(_vars.resolveMerge(&thenVars, &thenVars + 1, _builder.getBuildPoint()));
       _vars.setTopBlock(_builder.getBuildPoint());
@@ -1715,6 +1818,7 @@ bool spirv::FunctionBuilder::buildIfStmt(F1 condDirector, F2 thenDirector)
 template<class F1, class F2, class F3>
 bool spirv::FunctionBuilder::buildIfStmt(F1 condDirector, F2 thenDirector, F3 elseDirector)
 {
+  applyPendingSwitchMerge();
   StmtBuilder condStmt{_types, _vars};
   if(condDirector(condStmt))
   {
@@ -1724,17 +1828,17 @@ bool spirv::FunctionBuilder::buildIfStmt(F1 condDirector, F2 thenDirector, F3 el
 
     llvm::SmallVector<BlockVariables, 2> blockVars;
 
-    _vars.push(_builder.getBuildPoint(), _loops.top());
+    pushBlockVars();
     if(thenDirector(*this))
     {
-      blockVars.push_back(_vars.pop());
+      blockVars.push_back(popBlockVars());
       ifBuilder.makeBeginElse();
 
-      _vars.push(_builder.getBuildPoint(), _loops.top());
+      pushBlockVars();
       if(elseDirector(*this))
       {
         ifBuilder.makeEndIf();
-        blockVars.push_back(_vars.pop());
+        blockVars.push_back(popBlockVars());
 
         _vars.applyMergeResult(_vars.resolveMerge(blockVars.begin(), blockVars.end(), _builder.getBuildPoint()));
         _vars.setTopBlock(_builder.getBuildPoint());
@@ -1748,6 +1852,7 @@ bool spirv::FunctionBuilder::buildIfStmt(F1 condDirector, F2 thenDirector, F3 el
 template<class F>
 bool spirv::FunctionBuilder::buildReturnStmt(F exprDirector)
 {
+  applyPendingSwitchMerge();
   StmtBuilder stmt{_types, _vars};
   if(exprDirector(stmt))
   {
@@ -1764,18 +1869,105 @@ bool spirv::FunctionBuilder::buildReturnStmt(F exprDirector)
 template<class F>
 bool spirv::FunctionBuilder::buildStmt(F exprDirector)
 {
+  applyPendingSwitchMerge();
   StmtBuilder stmt{_types, _vars};
   return exprDirector(stmt);
 }
 
 template<class F1, class F2>
+bool spirv::FunctionBuilder::buildSwitchStmt(F1 condDirector, F2 bodyDirector)
+{
+  applyPendingSwitchMerge();
+  StmtBuilder stmt{_types, _vars};
+  if(condDirector(stmt))
+  {
+    auto headerBlock = _builder.getBuildPoint();
+    auto mergeBlock = llvm::make_unique<spv::Block>(_builder.getUniqueId(), headerBlock->getParent());
+
+    // We cannot use spv::Builder's switch interface because we don't know all
+    // the values and cases up front.
+    auto mergeInst = llvm::make_unique<spv::Instruction>(spv::OpSelectionMerge);
+    mergeInst->addIdOperand(mergeBlock->getId());
+    mergeInst->addImmediateOperand(spv::SelectionControlMaskNone);
+    headerBlock->addInstruction(mergeInst.get());
+    mergeInst.release();
+
+    auto switchInst = llvm::make_unique<spv::Instruction>(spv::NoResult, spv::NoType, spv::OpSwitch);
+    switchInst->addIdOperand(load(stmt.expr()));
+    switchInst->addIdOperand(spv::NoResult); // This is later replaced when we know the default situtation
+    headerBlock->addInstruction(switchInst.get());
+
+    _vars.setTopBlock(_builder.getBuildPoint());
+    SwitchContext switsh{headerBlock, mergeBlock.get(), switchInst.release()};
+    SwitchStack::PushScoped pushSwitch{_switches, &switsh};
+    BreakStack::PushSwitchScoped pushBreak{_breaks};
+
+    // Precreate the first block. If a new case recognizes that the previous
+    // block is empty it is re-used.
+    auto block = llvm::make_unique<spv::Block>(_builder.getUniqueId(), headerBlock->getParent());
+    block->addPredecessor(headerBlock);
+    headerBlock->addSuccessor(block.get());
+    headerBlock->getParent().addBlock(block.get());
+    _builder.setBuildPoint(block.get());
+    block.release();
+
+    pushBlockVars();
+    if(bodyDirector(*this))
+    {
+      // If the final block was not closed add an implicit break
+      if(!_builder.getBuildPoint()->isTerminated() && !_builder.getBuildPoint()->isUnreachable())
+      {
+        auto breakInst = llvm::make_unique<spv::Instruction>(spv::OpBranch);
+        breakInst->addIdOperand(mergeBlock->getId());
+        _builder.getBuildPoint()->addInstruction(breakInst.get());
+        _builder.getBuildPoint()->addSuccessor(mergeBlock.get());
+        mergeBlock->addPredecessor(_builder.getBuildPoint());
+        breakInst.release();
+      }
+      switsh.addBreakBlock(popBlockVars());
+
+      headerBlock->getParent().addBlock(mergeBlock.get());
+      if(!switsh.hasDefault())
+      {
+        switsh.setDefault(mergeBlock.get());
+        headerBlock->addSuccessor(mergeBlock.get());
+        mergeBlock->addPredecessor(headerBlock);
+      }
+      _builder.setBuildPoint(mergeBlock.get());
+      switsh.mergeBreakBlocks(_vars);
+      _vars.setTopBlock(mergeBlock.get());
+      mergeBlock.release();
+      return true;
+    }
+  }
+  return false;
+}
+
+bool spirv::FunctionBuilder::buildSwitchCaseStmt(llvm::APSInt value)
+{
+  auto x = static_cast<std::uint32_t>(value.getZExtValue());
+  nextSwitchCaseBlock();
+  _switches.top()->addCase(x, _builder.getBuildPoint());
+  return true;
+}
+
+bool spirv::FunctionBuilder::buildSwitchDefaultStmt()
+{
+  nextSwitchCaseBlock();
+  _switches.top()->setDefault(_builder.getBuildPoint());
+  return true;
+}
+
+template<class F1, class F2>
 bool spirv::FunctionBuilder::buildWhileStmt(F1 condDirector, F2 bodyDirector)
 {
+  applyPendingSwitchMerge();
   return buildSimpleLoopCommon(true, std::move(condDirector), std::move(bodyDirector));
 }
 
 bool spirv::FunctionBuilder::declareUndefinedVar(const VarDecl& var)
 {
+  applyPendingSwitchMerge();
   StmtBuilder stmt{_types, _vars};
   // Store the variable with an undefined value. We need this to have an operand
   // for OpPhi for all blocks dominated by the current one.
@@ -1786,6 +1978,7 @@ bool spirv::FunctionBuilder::declareUndefinedVar(const VarDecl& var)
 template<class F>
 bool spirv::FunctionBuilder::declareVar(const VarDecl& var, F initDirector)
 {
+  applyPendingSwitchMerge();
   StmtBuilder stmt{_types, _vars};
   // If the variable is loaded before being written it produces an OpUndef value.
   // TODO: references
@@ -1854,32 +2047,72 @@ bool spirv::FunctionBuilder::setReturnType(QualType type)
   return true;
 }
 
+void spirv::FunctionBuilder::applyPendingSwitchMerge()
+{
+  if(_switches.top())
+  {
+    _switches.top()->applyPendingMerge(_vars, _builder.getBuildPoint());
+  }
+}
+
+void spirv::FunctionBuilder::nextSwitchCaseBlock()
+{
+  auto* prevCaseBlock = _builder.getBuildPoint();
+  // If the current block has only a single instruction then it is OpLabel
+  // and means the previous case label contained no statements, in which
+  // case we simply re-use the same block as jump target.
+  if(prevCaseBlock->getNumInstructions() == 1 && !prevCaseBlock->isUnreachable())
+    return;
+
+  auto* switsh = _switches.top();
+  auto prevCaseVars = popBlockVars();
+  auto nextCaseBlock = llvm::make_unique<spv::Block>(_builder.getUniqueId(), prevCaseBlock->getParent());
+  nextCaseBlock->addPredecessor(switsh->headerBlock());
+  switsh->headerBlock()->addSuccessor(nextCaseBlock.get());
+  prevCaseBlock->getParent().addBlock(nextCaseBlock.get());
+  _builder.setBuildPoint(nextCaseBlock.get());
+  pushBlockVars();
+
+  // If the previous block is not terminated it is a fallthrough to the next case.
+  // We have to set a branch and merge variables from the header block and the previous block.
+  if(!prevCaseBlock->isTerminated() && !prevCaseBlock->isUnreachable())
+  {
+    auto branch = llvm::make_unique<spv::Instruction>(spv::OpBranch);
+    branch->addIdOperand(nextCaseBlock->getId());
+    prevCaseBlock->addInstruction(branch.get());
+    prevCaseBlock->addSuccessor(nextCaseBlock.get());
+    nextCaseBlock->addPredecessor(prevCaseBlock);
+    branch.release();
+    switsh->rememberPendingMerge(std::move(prevCaseVars));
+  }
+  nextCaseBlock.release();
+}
+
 template<class F1, class F2>
 bool spirv::FunctionBuilder::buildSimpleLoopCommon(bool testFirst, F1 condDirector, F2 bodyDirector)
 {
-  auto* preheaderBlock = _builder.getBuildPoint();
-  _vars.setTopBlock(preheaderBlock);
+  _vars.setTopBlock(_builder.getBuildPoint());
 
   StmtBuilder condStmt{_types, _vars};
-  LoopMergeContext loop{_builder.getBuildPoint(), _vars, _loops.top(), nullptr};
-  LoopStack::ScopedPush push{_loops, &loop};
+  LoopContext loop{_builder.getBuildPoint(), _vars, _loops.top(), nullptr};
+  LoopStack::PushScoped pushLoop{_loops, &loop};
+  BreakStack::PushLoopScoped pushBreak{_breaks};
 
   _builder.makeNewLoop(testFirst);
-  assert(preheaderBlock->getNumSuccessors() == 1);
   auto* testBlock = _builder.getBuildPoint();
-  _vars.push(testBlock, &loop);
+  pushBlockVars(testBlock);
   if(condDirector(condStmt))
   {
     _builder.createLoopTestBranch(load(condStmt.expr()));
     auto* bodyBlock = _builder.getBuildPoint();
-    _vars.push(bodyBlock, &loop);
+    pushBlockVars(bodyBlock);
     if(bodyDirector(*this))
     {
       _builder.closeLoop();
       auto mergeBlock = _builder.getBuildPoint();
       _vars.collapseLoopStackIntoTop();
-      loop.addContinueBlock(_vars.pop());
-      loop.setHeaderBlock(_vars.pop());
+      loop.addContinueBlock(popBlockVars());
+      loop.setHeaderBlock(popBlockVars());
       loop.applyMerge(mergeBlock);
       _vars.setTopBlock(mergeBlock);
       return true;

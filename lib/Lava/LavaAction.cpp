@@ -328,7 +328,7 @@ private:
     {
       // GLSL
       auto module = glsl::createModuleBuilder(_ci.getASTContext());
-      buildModule(_ctx, module, ShaderStage::vertex);
+      buildModule(_ci.getASTContext(), _ctx, module, ShaderStage::vertex);
       llvm::errs() << module.moduleContent();
     }
     llvm::errs() << "====================\n";
@@ -337,7 +337,7 @@ private:
       spv::Parameterize();
       GLSL_STD_450::GetDebugNames(GlslStd450DebugNames);
       auto module = spirv::createModuleBuilder(_ci.getASTContext());
-      buildModule(_ctx, module, ShaderStage::vertex);
+      buildModule(_ci.getASTContext(), _ctx, module, ShaderStage::vertex);
       printSpirv(module.moduleContent());
     }
 

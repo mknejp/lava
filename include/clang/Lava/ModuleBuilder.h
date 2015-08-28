@@ -14,6 +14,7 @@
 #define LLVM_CLANG_LAVA_MODULEBUILDER_H
 
 #include "clang/lava/ShaderContext.h"
+#include "llvm/ADT/APSInt.h"
 #include <memory>
 
 namespace clang
@@ -38,7 +39,7 @@ namespace clang
     template<class Target, class Builder>
     struct DirectorInvoker;
 
-    bool buildModule(ShaderContext& context, ModuleBuilder& builder, ShaderStage stage);
+    bool buildModule(ASTContext& ast, ShaderContext& context, ModuleBuilder& builder, ShaderStage stage);
 
   } // end namespace lava
 } // end namespace clang
@@ -348,13 +349,36 @@ public:
     auto f = StmtDirector{std::forward<F>(expr)};
     return _success = _success && buildReturnStmtImpl(f);
   }
-  /// Build a new statement that is not the declaration of a new variable
+  /// Build a new statement that is not the declaration of a new variable.
   /// \param stmt A statement directo to build the actual statement/expression.
   template<class F>
   bool buildStmt(F&& stmt)
   {
     auto f = StmtDirector{std::forward<F>(stmt)};
     return _success = _success && buildStmtImpl(f);
+  }
+  /// Build a switch statement.
+  /// \param cond A statement director to build up the condition expression.
+  /// \param body A function director to build up the content of the switch's body.
+  template<class F1, class F2>
+  bool buildSwitchStmt(F1&& cond, F2&& body)
+  {
+    auto f1 = StmtDirector{std::forward<F1>(cond)};
+    auto f2 = Director{std::forward<F2>(body)};
+    return _success = _success && buildSwitchStmtImpl(f1, f2);
+  }
+  /// Build a switch case statement.
+  /// Must be called from within the body director of a buildSwitchStmt() and not in any nested control flow.
+  /// \param value The value for this case.
+  bool buildSwitchCaseStmt(llvm::APSInt value)
+  {
+    return _success = _success && buildSwitchCaseStmtImpl(value);
+  }
+  /// Build a switch default statement.
+  /// Must be called from within the body director of a buildSwitchStmt() and not in any nested control flow.
+  bool buildSwitchDefaultStmt()
+  {
+    return _success = _success && buildSwitchDefaultStmtImpl();
   }
   /// Build a while loop.
   /// \param cond A statement director to build up the condition expression.
@@ -417,6 +441,9 @@ private:
   virtual bool buildIfStmtImpl(StmtDirector& cond, Director& then, Director& orElse) = 0;
   virtual bool buildReturnStmtImpl(StmtDirector& expr) = 0;
   virtual bool buildStmtImpl(StmtDirector& director) = 0;
+  virtual bool buildSwitchStmtImpl(StmtDirector& cond, Director& body) = 0;
+  virtual bool buildSwitchCaseStmtImpl(llvm::APSInt value) = 0;
+  virtual bool buildSwitchDefaultStmtImpl() = 0;
   virtual bool buildWhileStmtImpl(StmtDirector& cond, Director& body) = 0;
   virtual bool declareUndefinedVarImpl(const VarDecl& var) = 0;
   virtual bool declareVarImpl(const VarDecl& var, StmtDirector& director) = 0;
@@ -479,6 +506,19 @@ private:
   bool buildStmtImpl(StmtDirector& stmt) override
   {
     return _target.buildStmt(DirectorInvoker<T, StmtBuilder>{_target, stmt});
+  }
+  bool buildSwitchStmtImpl(StmtDirector& cond, Director& body) override
+  {
+    return _target.buildSwitchStmt(DirectorInvoker<T, StmtBuilder>{_target, cond},
+                                   DirectorInvoker<T, FunctionBuilder>{_target, body});
+  }
+  bool buildSwitchCaseStmtImpl(llvm::APSInt value) override
+  {
+    return _target.buildSwitchCaseStmt(value);
+  }
+  bool buildSwitchDefaultStmtImpl() override
+  {
+    return _target.buildSwitchDefaultStmt();
   }
   bool buildWhileStmtImpl(StmtDirector& cond, Director& body) override
   {

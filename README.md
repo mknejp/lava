@@ -241,14 +241,14 @@ Legend:
 
 | Statements | SPIR-V | GLSL | HLSL  | MetalSL |
 | ---------------- |:------:|:----:|:-----:|:-------:|
-| `break` | :warning: (loops only) | :white_check_mark: | :x: | :x: |
+| `break` | :white_check_mark: | :white_check_mark: | :x: | :x: |
 | `continue` | :white_check_mark: | :white_check_mark: | :x: | :x: |
 | `discard` | :x: | :x: | :x: | :x: |
 | `do` | :white_check_mark: | :white_check_mark: | :x: | :x: |
 | `for` | :white_check_mark: | :white_check_mark: | :x: | :x: |
 | `if`/`else` | :white_check_mark: | :white_check_mark: | :x: | :x: |
 | `return` | :white_check_mark: | :white_check_mark: | :x: | :x: |
-| `switch` | :x: | :x: | :x: | :x: |
+| `switch` | :white_check_mark: | :white_check_mark: | :x: | :x: |
 | `while` | :white_check_mark: | :white_check_mark: | :x: | :x: |
 | initalized local | :white_check_mark: | :white_check_mark: | :x: | :x: |
 | uninitalized local | :white_check_mark: | :white_check_mark: | :x: | :x: |

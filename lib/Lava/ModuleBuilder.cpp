@@ -41,17 +41,21 @@ namespace
     using StmtVisitor = ConstStmtVisitor<FunctionVisitor>;
     using DeclVisitor = ConstDeclVisitor<FunctionVisitor>;
 
-    FunctionVisitor(FunctionBuilder& builder) : _builder(builder) { }
+    FunctionVisitor(ASTContext& ast, FunctionBuilder& builder)
+    : _ast(ast), _builder(builder) { }
 
     // Statements
     void VisitBreakStmt(const BreakStmt* stmt);
+    void VisitCaseStmt(const CaseStmt* stmt);
     void VisitCompoundStmt(const CompoundStmt* stmt);
     void VisitContinueStmt(const ContinueStmt* stmt);
     void VisitDeclStmt(const DeclStmt* stmt);
+    void VisitDefaultStmt(const DefaultStmt* stmt);
     void VisitDoStmt(const DoStmt* stmt);
     void VisitForStmt(const ForStmt* stmt);
     void VisitIfStmt(const IfStmt* stmt);
     void VisitReturnStmt(const ReturnStmt* stmt);
+    void VisitSwitchStmt(const SwitchStmt* stmt);
     void VisitWhileStmt(const WhileStmt* stmt);
 
     // Declarations
@@ -65,7 +69,7 @@ namespace
     void buildStmtWithPossibleConditionVariable(VarDecl* conditionVariable,
                                                 const DeclStmt* conditionVariableDeclStmt,
                                                 F build);
-    
+    ASTContext& _ast;
     FunctionBuilder& _builder;
   };
 
@@ -106,15 +110,14 @@ namespace
     }
   }
 
-  // Create a Callable<void(FunctionBuilder&)> that builds up a block using
-  // its own private instance of FunctionVisitor.
-  auto makeBlockBuilder = [] (const Stmt* stmt)
+  // Create a Callable<void(FunctionBuilder&)> that builds up a block.
+  auto makeBlockBuilder = [] (FunctionVisitor& fv, const Stmt* stmt)
   {
-    return [stmt] (FunctionBuilder& builder)
+    return [stmt, &fv] (FunctionBuilder& builder)
     {
-      forceScope(stmt, builder, [stmt] (FunctionBuilder& builder)
+      forceScope(stmt, builder, [stmt, &fv] (FunctionBuilder& builder)
       {
-        FunctionVisitor{builder}.StmtVisitor::Visit(stmt);
+        fv.StmtVisitor::Visit(stmt);
       });
     };
   };
@@ -145,13 +148,23 @@ void FunctionVisitor::VisitBreakStmt(const BreakStmt* stmt)
   });
 }
 
+void FunctionVisitor::VisitCaseStmt(const CaseStmt* stmt)
+{
+  llvm::APSInt value;
+  if(stmt->getLHS()->EvaluateAsInt(value, _ast))
+  {
+    _builder.buildSwitchCaseStmt(value.extOrTrunc(32));
+    StmtVisitor::Visit(stmt->getSubStmt());
+  }
+}
+
 void FunctionVisitor::VisitCompoundStmt(const CompoundStmt* stmt)
 {
-  _builder.pushScope([stmt] (FunctionBuilder& builder)
+  _builder.pushScope([stmt, this] (FunctionBuilder& builder)
   {
     for(const auto* stmt : stmt->body())
     {
-      FunctionVisitor{builder}.StmtVisitor::Visit(stmt);
+      StmtVisitor::Visit(stmt);
     }
   });
 }
@@ -175,10 +188,16 @@ void FunctionVisitor::VisitDeclStmt(const DeclStmt* stmt)
   }
 }
 
+void FunctionVisitor::VisitDefaultStmt(const DefaultStmt* stmt)
+{
+  _builder.buildSwitchDefaultStmt();
+  StmtVisitor::Visit(stmt->getSubStmt());
+}
+
 void FunctionVisitor::VisitDoStmt(const DoStmt* stmt)
 {
   _builder.buildDoStmt(makeExprBuilder(stmt->getCond()),
-                       makeBlockBuilder(stmt->getBody()));
+                       makeBlockBuilder(*this, stmt->getBody()));
 }
 
 void FunctionVisitor::VisitForStmt(const ForStmt* stmt)
@@ -186,13 +205,13 @@ void FunctionVisitor::VisitForStmt(const ForStmt* stmt)
   auto* initDeclStmt = dyn_cast_or_null<DeclStmt>(stmt->getInit());
   auto* condDeclStmt = stmt->getConditionVariableDeclStmt();
 
-  auto build = [stmt] (FunctionBuilder& builder)
+  auto build = [stmt, this] (FunctionBuilder& builder)
   {
-    auto init = [stmt] (FunctionBuilder& builder)
+    auto init = [stmt, this] (FunctionBuilder& builder)
     {
       if(!stmt->getConditionVariableDeclStmt())
       {
-        FunctionVisitor{builder}.StmtVisitor::Visit(stmt->getInit());
+        StmtVisitor::Visit(stmt->getInit());
       }
     };
     auto cond = [stmt] (StmtBuilder& builder)
@@ -201,7 +220,7 @@ void FunctionVisitor::VisitForStmt(const ForStmt* stmt)
     };
     builder.buildForStmt(stmt->getCond() != nullptr,
                          init, cond, makeExprBuilder(stmt->getInc()),
-                         makeBlockBuilder(stmt->getBody()));
+                         makeBlockBuilder(*this, stmt->getBody()));
   };
 
   // If the condition declares a new variables we have to drag both the
@@ -224,18 +243,18 @@ void FunctionVisitor::VisitForStmt(const ForStmt* stmt)
 
 void FunctionVisitor::VisitIfStmt(const IfStmt* stmt)
 {
-  auto build = [stmt] (FunctionBuilder& builder)
+  auto build = [stmt, this] ()
   {
     if(stmt->getElse())
     {
-      builder.buildIfStmt([stmt] (StmtBuilder& builder) { ExprVisitor{builder}.Visit(stmt->getCond()); },
-                          makeBlockBuilder(stmt->getThen()),
-                          makeBlockBuilder(stmt->getElse()));
+      _builder.buildIfStmt([stmt] (StmtBuilder& builder) { ExprVisitor{builder}.Visit(stmt->getCond()); },
+                           makeBlockBuilder(*this, stmt->getThen()),
+                          makeBlockBuilder(*this, stmt->getElse()));
     }
     else
     {
-      builder.buildIfStmt([stmt] (StmtBuilder& builder) { ExprVisitor{builder}.Visit(stmt->getCond()); },
-                          makeBlockBuilder(stmt->getThen()));
+      _builder.buildIfStmt([stmt] (StmtBuilder& builder) { ExprVisitor{builder}.Visit(stmt->getCond()); },
+                           makeBlockBuilder(*this, stmt->getThen()));
     }
   };
 
@@ -256,12 +275,25 @@ void FunctionVisitor::VisitReturnStmt(const ReturnStmt* stmt)
   });
 }
 
+void FunctionVisitor::VisitSwitchStmt(const SwitchStmt* stmt)
+{
+  auto build = [stmt, this] ()
+  {
+    _builder.buildSwitchStmt([stmt] (StmtBuilder& builder) { ExprVisitor{builder}.Visit(stmt->getCond()); },
+                             makeBlockBuilder(*this, stmt->getBody()));
+  };
+
+  buildStmtWithPossibleConditionVariable(stmt->getConditionVariable(),
+                                         stmt->getConditionVariableDeclStmt(),
+                                         build);
+}
+
 void FunctionVisitor::VisitWhileStmt(const WhileStmt* stmt)
 {
-  auto build = [stmt] (FunctionBuilder& builder)
+  auto build = [stmt, this] ()
   {
-    builder.buildWhileStmt([stmt] (StmtBuilder& builder) { ExprVisitor{builder}.Visit(stmt->getCond()); },
-                           makeBlockBuilder(stmt->getBody()));
+    _builder.buildWhileStmt([stmt] (StmtBuilder& builder) { ExprVisitor{builder}.Visit(stmt->getCond()); },
+                            makeBlockBuilder(*this, stmt->getBody()));
   };
 
   buildStmtWithPossibleConditionVariable(stmt->getConditionVariable(),
@@ -281,14 +313,14 @@ void FunctionVisitor::buildStmtWithPossibleConditionVariable(VarDecl* conditionV
     // out of scope immediately following the while stmt.
     _builder.pushScope([&] (FunctionBuilder& builder)
                        {
-                         FunctionVisitor{builder}.VisitDeclStmt(conditionVariableDeclStmt);
-                         build(builder);
+                         VisitDeclStmt(conditionVariableDeclStmt);
+                         build();
                        });
     // TODO: run destructors
   }
   else
   {
-    build(_builder);
+    build();
   }
 }
 
@@ -494,7 +526,7 @@ namespace
     });
   }
 
-  void buildFunction(FunctionDecl& decl, FunctionBuilder& builder)
+  void buildFunction(ASTContext& ast, FunctionDecl& decl, FunctionBuilder& builder)
   {
     builder.setReturnType(decl.getReturnType());
     // We feed the arguments individually in case we have to transform them
@@ -502,25 +534,25 @@ namespace
     {
       builder.addParam(*param);
     }
-    FunctionVisitor{builder}.StmtVisitor::Visit(decl.getBody());
+    FunctionVisitor{ast, builder}.StmtVisitor::Visit(decl.getBody());
   }
 
-  void buildFunctions(ShaderContext& context, ModuleBuilder& module, ShaderStage stage)
+  void buildFunctions(ASTContext& ast, ShaderContext& context, ModuleBuilder& module, ShaderStage stage)
   {
     for_each_entity(stage, context.functions, [&] (EmittedFunction& f)
     {
-      return module.buildFunction(*f.decl, [&f] (FunctionBuilder& builder)
+      return module.buildFunction(*f.decl, [&f, &ast] (FunctionBuilder& builder)
       {
-        buildFunction(*f.decl, builder);
+        buildFunction(ast, *f.decl, builder);
       });
     });
   }
 }
 
-bool clang::lava::buildModule(ShaderContext& context, ModuleBuilder& module, ShaderStage stage)
+bool clang::lava::buildModule(ASTContext& ast, ShaderContext& context, ModuleBuilder& module, ShaderStage stage)
 {
   buildRecords(context, module, stage);
-  buildFunctions(context, module, stage);
+  buildFunctions(ast, context, module, stage);
 
   return true;
 }

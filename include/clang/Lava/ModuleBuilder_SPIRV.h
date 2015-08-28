@@ -18,6 +18,7 @@
 #include "clang/Lava/CodePrintingTools.h"
 #include "clang/Lava/SPIRV.h"
 #include "SPIRV/SpvBuilder.h"
+#include "llvm/ADT/SmallBitVector.h"
 #include <stack>
 
 namespace clang
@@ -33,17 +34,24 @@ namespace clang
     namespace spirv
     {
       struct BlockVariables;
+      class  BreakStack;
       struct ExprResult;
       class  FunctionBuilder;
-      class  LoopMergeContext;
-      class  LoopStack;
+      class  LoopContext;
       struct MergeResult;
       class  ModuleBuilder;
       class  RecordBuilder;
       class  StmtBuilder;
+      class  SwitchContext;
       class  TypeCache;
       struct Variable;
       class  VariablesStack;
+
+      template<class Context>
+      class ContextStack;
+
+      using LoopStack = ContextStack<LoopContext>;
+      using SwitchStack = ContextStack<SwitchContext>;
 
       using Id = ::spv::Id;
 
@@ -159,7 +167,8 @@ struct clang::lava::spirv::BlockVariables
 {
   std::vector<clang::lava::spirv::Variable> vars;
   spv::Block* block;
-  LoopMergeContext* loop;
+  LoopContext* loop;
+  SwitchContext* switsh;
 };
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -220,7 +229,7 @@ public:
   // Extract all variables from the top and mark the remaining object as invalid
   // thus making it not participate in merges.
   auto extractTop() -> BlockVariables;
-  void push(spv::Block* block, LoopMergeContext* loop);
+  void push(spv::Block* block, LoopContext* loop, SwitchContext* switsh);
   auto pop() -> BlockVariables;
 
   // Collapse all block variables associated to the current loop's variable
@@ -228,9 +237,14 @@ public:
   // structured control flow so the top block has all the variable information
   // necessary for merging.
   void collapseLoopStackIntoTop();
+  // Collapse all block variables associated to the current switch's variable
+  // stack into the top. This is necessary for break that leave
+  // structured control flow so the top block has all the variable information
+  // necessary for merging.
+  void collapseSwitchStackIntoTop();
 
   // Find the value of the variable *before* entering the given loop.
-  Id findPreLoopValue(const VarDecl* decl, LoopMergeContext& loop);
+  Id findPreLoopValue(const VarDecl* decl, LoopContext& loop);
 
   // Analyse the control flow coming to the mergeBlock and buld up a
   // MergeResult structure containing information about how each active variable
@@ -252,6 +266,8 @@ private:
   static void sort(BlockVariables& blockVars);
   static bool shouldStoreIfDirty(const Variable& var);
 
+  template<class F>
+  void collapseStackIntoTop(F predicate);
   auto load(const VarDecl& decl) -> Id;
   auto find(const VarDecl* decl) -> Variable&;
   auto tryFind(const VarDecl* decl) -> Variable*;
@@ -267,14 +283,14 @@ private:
 };
 
 ////////////////////////////////////////////////////////////////////////////////
-// LoopMergeContext
+// LoopContext
 //
 
-class clang::lava::spirv::LoopMergeContext
+class clang::lava::spirv::LoopContext
 {
 public:
   template<class F>
-  LoopMergeContext(spv::Block* preheader, VariablesStack& vars, LoopMergeContext* parent, F incDirector);
+  LoopContext(spv::Block* preheader, VariablesStack& vars, LoopContext* parent, F incDirector);
 
   void addBreakBlock(BlockVariables block);
   void addContinueBlock(BlockVariables block);
@@ -283,7 +299,7 @@ public:
 
   void applyMerge(spv::Block* mergeBlock);
 
-  LoopMergeContext* parent() const { return _parent; }
+  LoopContext* parent() const { return _parent; }
 
   bool invokeIncDirector(FunctionBuilder& builder);
 
@@ -313,28 +329,92 @@ private:
   llvm::SmallVector<BlockVariables, 4> _continueBlocks;
   spv::Block* _preheader;
   BlockVariables _headerBlock;
-  LoopMergeContext* _parent;
+  LoopContext* _parent;
   VariablesStack& _vars;
   std::function<bool(FunctionBuilder&)> _incDirector;
 };
 
 ////////////////////////////////////////////////////////////////////////////////
-// LoopStack
+// SwitchContext
 //
 
-class clang::lava::spirv::LoopStack
+class clang::lava::spirv::SwitchContext
 {
 public:
-  class ScopedPush;
+  SwitchContext(spv::Block* headerBlock, spv::Block* mergeBlock, spv::Instruction* switchInst);
 
-  LoopStack() { push(nullptr); }
-
-  void pop() { _stack.pop(); }
-  void push(LoopMergeContext* ctx) { _stack.push(ctx); }
-  auto top() -> LoopMergeContext* { return _stack.top(); }
+  void addCase(std::uint32_t value, spv::Block* block);
+  void setDefault(spv::Block* block);
+  bool hasDefault() const { return _defaultBlock != spv::NoResult; }
+  void addBreakBlock(BlockVariables block);
+  void mergeBreakBlocks(VariablesStack& vars);
+  spv::Block* headerBlock() const { return _headerBlock; }
+  spv::Block* mergeBlock() const { return _mergeBlock; }
+  void rememberPendingMerge(BlockVariables predecessor);
+  void applyPendingMerge(VariablesStack& vars, spv::Block* targetBlock);
 
 private:
-  std::stack<LoopMergeContext*, llvm::SmallVector<LoopMergeContext*, 4>> _stack;
+  spv::Block* _headerBlock;
+  spv::Block* _mergeBlock;
+  spv::Instruction* _switchInst;
+  Id _defaultBlock = spv::NoResult;
+  std::vector<BlockVariables> _breakBlocks;
+  llvm::Optional<BlockVariables> _pendingMerge;
+};
+
+////////////////////////////////////////////////////////////////////////////////
+// ContextStack
+//
+
+template<class Context>
+class clang::lava::spirv::ContextStack
+{
+public:
+  class PushScoped
+  {
+  public:
+    PushScoped(ContextStack& stack, Context* ctx) : _stack(stack) { _stack.push(ctx); }
+    ~PushScoped() { _stack.pop(); }
+
+  private:
+    ContextStack& _stack;
+  };
+
+  ContextStack() { push(nullptr); }
+
+  void pop() { _stack.pop(); }
+  void push(Context* ctx) { _stack.push(ctx); }
+  auto top() -> Context* { return _stack.top(); }
+
+private:
+  std::stack<Context*, llvm::SmallVector<Context*, 4>> _stack;
+};
+
+////////////////////////////////////////////////////////////////////////////////
+// BreakStack
+//
+
+class clang::lava::spirv::BreakStack
+{
+public:
+  class PushLoopScoped;
+  class PushSwitchScoped;
+
+  BreakStack() { _stack.reserve(8); } // Very unlikely to have such deep loop/switch nesting
+  BreakStack(const BreakStack&) = delete;
+  BreakStack& operator=(const BreakStack&) = delete;
+
+  bool isLoop() const { return !_stack.empty() && _stack[_stack.size() - 1] == loopBreak; }
+  bool isSwitch() const { return !_stack.empty() && _stack[_stack.size() - 1] == switchBreak; }
+
+private:
+  static constexpr auto loopBreak = true;
+  static constexpr auto switchBreak = false;
+
+  void push(bool value) { _stack.resize(_stack.size() + 1, value); }
+  void pop() { _stack.resize(_stack.size()  -1); }
+
+  llvm::SmallBitVector _stack;
 };
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -413,6 +493,10 @@ public:
   template<class F>
   bool buildStmt(F exprDirector);
   template<class F1, class F2>
+  bool buildSwitchStmt(F1 condDirector, F2 bodyDirector);
+  bool buildSwitchCaseStmt(llvm::APSInt value);
+  bool buildSwitchDefaultStmt();
+  template<class F1, class F2>
   bool buildWhileStmt(F1 condDirector, F2 bodyDirector);
   bool declareUndefinedVar(const VarDecl& var);
   template<class F>
@@ -424,9 +508,14 @@ public:
   Id finalize();
 
 private:
+  void applyPendingSwitchMerge();
   template<class F1, class F2>
   bool buildSimpleLoopCommon(bool testFirst, F1 condDirector, F2 bodyDirector);
   Id load(const ExprResult& expr) { return _vars.load(expr); }
+  void nextSwitchCaseBlock();
+  BlockVariables popBlockVars() { return _vars.pop(); }
+  void pushBlockVars() { pushBlockVars(_builder.getBuildPoint()); }
+  void pushBlockVars(spv::Block* block) { _vars.push(block, _loops.top(), _switches.top()); }
   ExprResult store(const ExprResult& target, Id value) { return _vars.store(target, value); }
   ExprResult store(const ExprResult& target, const ExprResult& source) { return _vars.store(target, source); }
   void trackParameter(const ParmVarDecl& param, Id id);
@@ -441,6 +530,8 @@ private:
   std::vector<const ParmVarDecl*> _params;
   VariablesStack _vars{_types, _builder, nullptr};
   LoopStack _loops;
+  SwitchStack _switches;
+  BreakStack _breaks;
 };
 
 ////////////////////////////////////////////////////////////////////////////////
