@@ -44,6 +44,8 @@ namespace clang
     {
     public:
       TypeMangler(ASTContext& ast);
+      TypeMangler(TypeMangler&&);
+      TypeMangler& operator=(TypeMangler&&);
       ~TypeMangler();
 
       void mangleCxxTypeName(QualType type, IndentWriter& w) const;

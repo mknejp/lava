@@ -3,6 +3,9 @@ Lava is a project based on the Clang/LLVM toolset aiming to provide a unified C+
 
 It is in a very early state of development and more of an experiment (or proof-of-concept, if you like), worked on by one dude in his spare time. If everything goes according to plan it will be able to output SPIR-V, GLSL, ESSL, HLSL, MetalSL, and C++ headers with compatible data structures etc.
 
+## Did you say SPIR-V?
+Indeed! Though it is still very early to have anything usable. All C++ control flow statements (except `goto`) are implemented and progress other stuff is steadily going forward. Getting this done properly and soonish has the highest priority for me.
+
 ## Getting it
 First follow the installation instructions at http://clang.llvm.org/get_started.html, (although I suggest using their Git mirrors instead of SVN) **except** use http://github.com/mknejp/lava instead of the official Clang repository, but don't run CMake just yet. Make sure all repositories are set to branch `release_37` as that is what Lava is currently being developed against.
 
@@ -13,85 +16,123 @@ Switch the Lava repository to branch `lava`.
 You are now ready to run CMake.
 
 ## What can I do with it?
-To play around build the `lava` target. Run the executable with `lava myfile.cpp --`. The exact output will vary depending on what I'm currently hacking on. It will probably be a mixture of the AST and/or GLSL and/or a SPIR-V dump. That's really it. Once the implementation gets a bit more stable output will be controlled with command line arguments. Also, expect crashes if the source contains stuff the code generators cannot handle yet. Restrict yourself to functions with basic expressions and `if/then/else` control flow. You will need a function marked with `vertex` or `fragment` to see anything since the frontend only processes symbols reachable from shader entry points.
+To play around build the `lava` target. Calling it without options prints out the help message. When running it over files expect crashes if the source contains stuff the code generators cannot handle yet. Restrict yourself to functions with basic expressions and control flow. You will need a function marked with `vertex` or `fragment` to see anything since the frontend currently only processes symbols reachable from shader entry points. Note that unlike with Clang the `-o` command specifies a *directory* to dump output files to since there can be multiple outputs per input, for example separate `.vert.glsl` and `.frag.glsl` files as GLSL doesn't support multistage shader sources.
 
-GLSL (of no specific version) and SPIR-V are the two backends that are actively being worked on right now. Many parts of the GLSL backend will be re-usable in the other generators since their languages all revolve around a highly similar C-based syntax.
+### Targets
+You must specify a target to generate code for with the `-target` option. The help message lists all avilable targets. Currently `glsl-300-es` and `spv-100` are available and actively worked on. `spv-100` will by default generate binaries but you can additionally specify `spv-disassemble-khr` to generate a text file with the Khronos-style disassembly instead.
 
-All the code generating stuff is in `include/Lava` and `lib/Lava` which you can experiment with. I try to make all the pieces as re-usable as possible. There were also some minor adjustments to Clang's Parser, AST and Sema modules to support function entry point attributes, matrices and other minor tweaks. But those adjustments are very incomplete as the primary focus right now is code generation. That's the reason I decided to put everything into a Clang fork instead of separating it.
+The targets are internally setup in a plugin-like architecture. Once finished users can provide their own target in form of dynamic library plugins in the same fashion Clang plugins work. There is no command line for loading them yet.
 
-## Did you say SPIR-V?
-Indeed! Though it is still very early to have anything usable. The basic blocks are in place and progress is steadily going forward. Getting this done properly and soonish has the highest priority for me. You may see SPIR-V disassembly when running the `lava` tool.
+### Code
+All the code generating stuff is in `include/Lava` and `lib/Lava` which you can experiment with. I try to make all the pieces as re-usable as possible. There were also some minor adjustments to Clang's Parser, AST and Sema modules to support function entry point attributes, matrices and other minor tweaks. But those adjustments are very incomplete as the primary focus right now is code generation. That's the reason I decided to put everything into a Clang fork instead of separating it. Many parts of the GLSL backend will be re-usable in the other generators since their languages all revolve around a highly similar C-based syntax.
 
 ## Silly example
-In order to see any output you currently require an entry point that calls your example code. Entry point code generation is not yet supported so you will only see the code for functions you call from there. Here is what a very silly example would generate from the following input:
+In order to see any output you currently require an entry point that calls your example code. Here is what a very silly example would generate from the following input:
 ```cpp
-namespace N
+vertex int fib(int x)
 {
-	int foo(int& a)
-	{
-		int x;
-		if(true)
-		{
-			if(true)
-			{
-				x = 2;
-			}
-			else
-			{
-				x = 3;
-			}
-		}
-		return x;
-	}
-}
+  if(x <= 0)
+    return 0;
 
-vertex void transform()
-{
-	int x;
-	N::foo(x);
+  auto fn_2 = 1;
+  auto fn_1 = 1;
+  auto fib = 1;
+  int temp;
+  for(auto i = 2; i <= x; ++i)
+  {
+    temp = fib;
+    fib = fn_2 + fn_1;
+    fn_2 = fn_1;
+    fn_1 = temp;
+  }
+  return fib;
 }
 ```
-This currently produces the following two outputs (left column SPIR-V, right column GLSL)
+This currently produces the following two outputs
 ```
-// Module Version 99                                                // int N::foo(int &a)
-// Generated by (magic number): bb                                  int _ZN1N3fooERi(inout int a);
-// Id's are bound by 21
-                                                                    // int N::foo(int &a)
-                              MemoryModel Logical GLSL450           int _ZN1N3fooERi(inout int a)
-                              Name 5  "_ZN1N3fooERi"                {
-                              Name 4  "a"                             int x;
-               1:             TypeInt 32 1                            if(true)
-               2:             TypePointer Function 1(int)             {
-               3:             TypeFunction 1(int) 2(ptr)                if(true)
-               8:             TypeBool                                  {
-               9:     8(bool) ConstantTrue                                x = 2;
-              14:      1(int) Constant 2                                }
-              16:      1(int) Constant 3                                else
-              19:             TypeVoid                                  {
- 5(_ZN1N3fooERi):      1(int) Function None 3                             x = 3;
-            4(a):      2(ptr) FunctionParameter                         }
-               6:             Label                                   }
-               7:      1(int) Undef                                   return x;
-                              SelectionMerge 11 None                }
-                              BranchConditional 9 10 11
-              10:               Label
-                                SelectionMerge 13 None
-                                BranchConditional 9 12 15
-              12:                 Label
-                                  Branch 13
-              15:                 Label
-                                  Branch 13
-              13:               Label
-              17:      1(int)   Phi 14 12 16 15
-                                Branch 11
-              11:             Label
-              18:      1(int) Phi 7 6 17 13
-                              ReturnValue 18
+// Module Version 99
+// Generated by (magic number): bb
+// Id's are bound by 35
+
+                              MemoryModel Logical GLSL450
+                              Name 4  "_Z3fibi"
+                              Name 3  "x"
+                              Name 14  "fn_2"
+                              Name 15  "fn_1"
+                              Name 16  "fib"
+                              Name 17  "temp"
+                              Name 19  "i"
+               1:             TypeInt 32 1
+               2:             TypeFunction 1(int) 1(int)
+               6:      1(int) Constant 0
+               7:             TypeBool
+              11:             TypeVoid
+              13:      1(int) Constant 1
+              18:      1(int) Constant 2
+      4(_Z3fibi):      1(int) Function None 2
+            3(x):      1(int) FunctionParameter
+               5:             Label
+               8:     7(bool) SLessThanEqual 3(x) 6
+                              SelectionMerge 10 None
+                              BranchConditional 8 9 10
+               9:               Label
+                                ReturnValue 6
+              10:             Label
+        14(fn_2):      1(int) CopyObject 13
+        15(fn_1):      1(int) CopyObject 13
+         16(fib):      1(int) CopyObject 13
+        17(temp):      1(int) Undef
+           19(i):      1(int) CopyObject 18
+                              Branch 20
+              20:             Label
+              33:      1(int) Phi 19(i) 10 28 22
+              32:      1(int) Phi 17(temp) 10 24 22
+              31:      1(int) Phi 16(fib) 10 25 22
+              30:      1(int) Phi 15(fn_1) 10 27 22
+              29:      1(int) Phi 14(fn_2) 10 26 22
+              23:     7(bool) SLessThanEqual 33 3(x)
+                              LoopMerge 21 None
+                              BranchConditional 23 22 21
+              22:               Label
+              24:      1(int)   CopyObject 31
+              25:      1(int)   IAdd 29 30
+              26:      1(int)   CopyObject 30
+              27:      1(int)   CopyObject 24
+              28:      1(int)   IAdd 33 13
+                                Branch 20
+              21:             Label
+                              ReturnValue 31
                               FunctionEnd
 ```
+```glsl
+// int fib(int x)
+int _Z3fibi(int x);
+
+// int fib(int x)
+int _Z3fibi(int x)
+{
+  if(x <= 0)
+  {
+    return 0;
+  }
+  int fn_2 = 1;
+  int fn_1 = 1;
+  int fib = 1;
+  int temp;
+  for(int i = 2; i <= x; ++i)
+  {
+    temp = fib;
+    fib = fn_2 + fn_1;
+    fn_2 = fn_1;
+    fn_1 = temp;
+  }
+  return fib;
+}
+```
+As you can see the GLSL generator tries to preserve the original code structure and statements as closely as possible to make transitioning between the two as straightforward as possible. It would probably make the implementation easier to always generate SPIR-V and then disassemble that into GLSL/HLSL/etc, however imagine you are on a platform that only has debugging support for OpenGL. With the SPIR-V intermediate step you would lose a lot of information about the code, making the generated sources very cryptic, and backporting the fixes from your GLSL debugging session to the original Lava code would be *very* difficult. Preserving the original code as closely as possible makes this task much easier.
 
 ## The Language
-Lava is based on the ISO-C++14 standard with some restrictions applied that aren't really suitable for a GPU stream processor (exceptions, RTTI, virtual, ...). There are also some limitations that are dictated by the capabilities of the supported target languages (no pointers, reference captures, etc). This all still needs fleshing out as the code generators mature.
+Lava is based on ISO-C++14 with some restrictions applied that aren't really suitable for a GPU stream processor (exceptions, RTTI, virtual, ...). There are also some limitations that are dictated by the capabilities of the supported target languages (no pointers, reference captures, etc). This all still needs fleshing out as the code generators mature.
 
 This code defines a few vector/matrix types
 ```cpp
@@ -147,7 +188,7 @@ I have investigated the Clang code some of them but most are here only for refer
   - [ ] `virtual`
   - [ ] `goto`
   - [ ] `union`
-  - [ ] **pointers**: Neither the SPIR-V logical memory model nor GLSL support pointer arithmetic. But refernces can probably be made to work. Shader inputs declared as pointers or unsized arrays can probably be transformed accordingly.
+  - [ ] **pointers**: Neither the SPIR-V logical memory model nor GLSL support pointer arithmetic. But refernces can probably be made to work. Shader inputs declared as pointers or unsized arrays can probably be transformed to buffer inputs.
   - [ ] *pointer-to-member operator*
   - [ ] *address-of operator*
   - [ ] *dereference operator*

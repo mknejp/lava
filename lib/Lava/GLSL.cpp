@@ -12,6 +12,7 @@
 #include "clang/AST/Expr.h"
 #include "clang/AST/ExprCXX.h"
 #include "clang/AST/DeclCXX.h"
+#include "clang/AST/Mangle.h"
 #include "clang/Lava/CodePrintingTools.h"
 #include "clang/Lava/ModuleBuilder.h"
 
@@ -28,6 +29,15 @@ ModuleBuilder clang::lava::glsl::createModuleBuilder(ASTContext& ast)
 ////////////////////////////////////////////////////////////////////////////////
 // TypeNamePrinter
 //
+
+glsl::TypeNamePrinter::TypeNamePrinter(ASTContext& ast)
+: _mangler(ItaniumMangleContext::create(ast, ast.getDiagnostics()))
+{
+}
+
+glsl::TypeNamePrinter::TypeNamePrinter(TypeNamePrinter&&) = default;
+glsl::TypeNamePrinter& glsl::TypeNamePrinter::operator=(TypeNamePrinter&&) = default;
+glsl::TypeNamePrinter::~TypeNamePrinter() = default;
 
 void glsl::TypeNamePrinter::printTypeName(QualType type, IndentWriter& w)
 {
@@ -633,6 +643,7 @@ void glsl::FunctionBuilder::buildProtoStrings()
 
 glsl::ModuleBuilder::ModuleBuilder(ASTContext& ast)
 : _typeNamePrinter(ast)
+, _ast(&ast)
 {
 }
 
@@ -662,7 +673,9 @@ bool glsl::ModuleBuilder::buildFunction(FunctionDecl& decl, Director director)
   return success;
 }
 
-std::string glsl::ModuleBuilder::moduleContent()
+std::string glsl::ModuleBuilder::reset()
 {
-  return _records.defs + '\n' + _functions.decls + '\n' + _functions.defs;
+  auto result = _records.defs + '\n' + _functions.decls + '\n' + _functions.defs;
+  *this = ModuleBuilder{*_ast};
+  return result;
 }

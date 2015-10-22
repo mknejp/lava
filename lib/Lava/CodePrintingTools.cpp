@@ -37,6 +37,8 @@ TypeMangler::TypeMangler(ASTContext& ast)
 {
 }
 
+TypeMangler::TypeMangler(TypeMangler&&) = default;
+TypeMangler& TypeMangler::operator=(TypeMangler&&) = default;
 TypeMangler::~TypeMangler() = default;
 
 void TypeMangler::mangleCxxTypeName(QualType type, IndentWriter& w) const

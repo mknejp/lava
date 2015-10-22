@@ -15,7 +15,10 @@
 #include "clang/AST/ExprCXX.h"
 #include "clang/Lava/ModuleBuilder.h"
 #include "clang/Lava/IndentWriter.h"
+#include "SPIRV/disassemble.h"
+#include "SPIRV/doc.h"
 #include <set>
+#include <sstream>
 
 using namespace clang;
 using namespace lava;
@@ -23,9 +26,9 @@ using namespace lava;
 using spirv::Id;
 using llvm::StringRef;
 
-ModuleBuilder clang::lava::spirv::createModuleBuilder(ASTContext& ast)
+ModuleBuilder clang::lava::spirv::createModuleBuilder(ASTContext& ast, Options opts)
 {
-  return lava::ModuleBuilder::create<spirv::ModuleBuilder>(ast);
+  return lava::ModuleBuilder::create<spirv::ModuleBuilder>(ast, std::move(opts));
 }
 
 namespace
@@ -129,7 +132,7 @@ Id spirv::TypeCache::get(QualType type) const
   {
     auto n = arr->getSize().getZExtValue();
     assert(n <= std::numeric_limits<unsigned>::max());
-    return _builder.makeArrayType(get(arr->getElementType()),
+    return _builder->makeArrayType(get(arr->getElementType()),
                                  static_cast<unsigned>(n));
   }
   else if(auto* ref = type->getAs<ReferenceType>())
@@ -142,38 +145,38 @@ Id spirv::TypeCache::get(QualType type) const
     switch(builtin->getKind())
     {
       case BuiltinType::Kind::Void:
-        return _builder.makeVoidType();
+        return _builder->makeVoidType();
       case BuiltinType::Kind::Bool:
-        return _builder.makeBoolType();
+        return _builder->makeBoolType();
       case BuiltinType::Kind::Int:
-        return _builder.makeIntType(32);
+        return _builder->makeIntType(32);
       case BuiltinType::Kind::UInt:
-        return _builder.makeUintType(32);
+        return _builder->makeUintType(32);
       case BuiltinType::Kind::Long:
       case BuiltinType::Kind::LongLong:
-        return _builder.makeIntType(64);
+        return _builder->makeIntType(64);
       case BuiltinType::Kind::ULong:
       case BuiltinType::Kind::ULongLong:
-        return _builder.makeUintType(64);
+        return _builder->makeUintType(64);
       case BuiltinType::Kind::Half:
-        return _builder.makeFloatType(16);
+        return _builder->makeFloatType(16);
       case BuiltinType::Kind::Float:
-        return _builder.makeFloatType(32);
+        return _builder->makeFloatType(32);
       case BuiltinType::Kind::Double:
       case BuiltinType::Kind::LongDouble:
-        return _builder.makeFloatType(64);
+        return _builder->makeFloatType(64);
       default:
         llvm_unreachable("TODO: other builtin types not implemented");
     }
   }
   else if(auto* vec = type->getAs<ExtVectorType>())
   {
-    return _builder.makeVectorType(get(vec->getElementType()),
+    return _builder->makeVectorType(get(vec->getElementType()),
                                    vec->getNumElements());
   }
   else if(auto* mat = type->getAs<MatrixType>())
   {
-    return _builder.makeMatrixType(get(mat->getElementType()),
+    return _builder->makeMatrixType(get(mat->getElementType()),
                                    mat->getNumColumns(), mat->getNumRows());
   }
   else if(auto* record = type->getAsCXXRecordDecl())
@@ -188,7 +191,7 @@ Id spirv::TypeCache::get(QualType type) const
 
 Id spirv::TypeCache::getPointer(QualType type, spv::StorageClass storage) const
 {
-  return _builder.makePointer(storage, get(type));
+  return _builder->makePointer(storage, get(type));
 }
 
 void spirv::TypeCache::add(CXXRecordDecl* decl, Id id)
@@ -1859,8 +1862,7 @@ bool spirv::FunctionBuilder::buildReturnStmt(F exprDirector)
     bool isVoid = _returnType == _builder.makeVoidType();
     // TODO: flush dirty variables
     _builder.makeReturn(false, // Return stmts from the clang AST are never implicit
-                        isVoid ? spv::NoResult : load(stmt.expr()),
-                        false);
+                        isVoid ? spv::NoResult : load(stmt.expr()));
     return true;
   }
   return false;
@@ -2125,7 +2127,7 @@ bool spirv::FunctionBuilder::buildSimpleLoopCommon(bool testFirst, F1 condDirect
 Id spirv::FunctionBuilder::finalize()
 {
   assert(_function && "there is no function");
-  _builder.leaveFunction(false);
+  _builder.leaveFunction();
   return _function->getId();
 }
 
@@ -2134,28 +2136,40 @@ Id spirv::FunctionBuilder::finalize()
 // ModuleBuilder
 //
 
-spirv::ModuleBuilder::ModuleBuilder(ASTContext& ast)
-: _ast(ast)
+spirv::ModuleBuilder::ModuleBuilder(ASTContext& ast, Options opts)
+: _ast(&ast)
 , _mangler(ast)
+, _opts(std::move(opts))
 {
   _builder.setSource(spv::SourceLanguage::SourceLanguageUnknown, 0);
 }
 
-std::string spirv::ModuleBuilder::moduleContent()
+std::string spirv::ModuleBuilder::reset()
 {
   auto spirv = std::vector<unsigned>{};
   _builder.dump(spirv);
   auto string = std::string{};
-  auto n = sizeof(unsigned) * spirv.size();
-  string.resize(n);
-  std::memcpy(&string[0], spirv.data(), n);
+  if(_opts.disassembleKHR)
+  {
+    spv::Parameterize();
+    std::ostringstream disassembly;
+    spv::Disassemble(disassembly, spirv);
+    string = disassembly.str();
+  }
+  else
+  {
+    auto n = sizeof(unsigned) * spirv.size();
+    string.resize(n);
+    std::memcpy(&string[0], spirv.data(), n);
+  }
+  *this = ModuleBuilder{*_ast, _opts};
   return string;
 }
 
 template<class Director>
 bool spirv::ModuleBuilder::buildRecord(QualType type, Director director)
 {
-  RecordBuilder builder{type, _types, _ast};
+  RecordBuilder builder{type, _types, *_ast};
   auto success = director(builder);
   if(success)
   {

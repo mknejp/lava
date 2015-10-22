@@ -473,11 +473,11 @@ void ExprVisitor::VisitUnaryOperator(const UnaryOperator* expr)
 namespace
 {
   template<class EmittedEntities, class F>
-  bool for_each_entity(ShaderStage stage, EmittedEntities& entities, F f)
+  bool for_each_entity(ShaderStage stages, EmittedEntities& entities, F f)
   {
     for(auto& entity : entities)
     {
-      if((entity.stages & stage) != ShaderStage::none)
+      if((entity.stages & stages) != ShaderStage::none)
       {
         if(!f(entity))
           return false;
@@ -537,9 +537,9 @@ namespace
     FunctionVisitor{ast, builder}.StmtVisitor::Visit(decl.getBody());
   }
 
-  void buildFunctions(ASTContext& ast, ShaderContext& context, ModuleBuilder& module, ShaderStage stage)
+  void buildFunctions(ASTContext& ast, ShaderContext& context, ModuleBuilder& module, ShaderStage stages)
   {
-    for_each_entity(stage, context.functions, [&] (EmittedFunction& f)
+    for_each_entity(stages, context.functions, [&] (EmittedFunction& f)
     {
       return module.buildFunction(*f.decl, [&f, &ast] (FunctionBuilder& builder)
       {
@@ -549,10 +549,10 @@ namespace
   }
 }
 
-bool clang::lava::buildModule(ASTContext& ast, ShaderContext& context, ModuleBuilder& module, ShaderStage stage)
+bool clang::lava::buildModule(ASTContext& ast, ShaderContext& context, ModuleBuilder& module, ShaderStage stages)
 {
-  buildRecords(context, module, stage);
-  buildFunctions(ast, context, module, stage);
+  buildRecords(context, module, stages);
+  buildFunctions(ast, context, module, stages);
 
   return true;
 }

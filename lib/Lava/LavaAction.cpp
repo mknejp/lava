@@ -14,32 +14,25 @@
 #include "clang/AST/Mangle.h"
 #include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/Frontend/CompilerInstance.h"
+#include "clang/Lava/CodeGen.h"
 #include "clang/Lava/ModuleBuilder.h"
 #include "clang/Lava/GLSL.h"
 #include "clang/Lava/SPIRV.h"
 #include "clang/Sema/SemaConsumer.h"
-#include "SPIRV/disassemble.h"
-#include "SPIRV/doc.h"
-#include "SPIRV/GLSL450Lib.h"
 #include <sstream>
-const char* GlslStd450DebugNames[GLSL_STD_450::Count];
 
 using namespace clang;
 using namespace lava;
+using llvm::StringRef;
 
-LangOptions lava::DefaultLangOptions()
+namespace
 {
-  LangOptions opts;
-  opts.CPlusPlus = 1;
-  opts.CPlusPlus11 = 1;
-  opts.CPlusPlus14 = 1;
-  opts.Lava = 1;
-  opts.LineComment = 1;
-  opts.Bool = 1;
-  opts.Exceptions = 0;
-  opts.RTTI = 0;
-  opts.RTTIData = 0;
-  return opts;
+  struct TranslatedModules
+  {
+    CodeGenModule merged; // If this is non-empty the others are ignored
+    CodeGenModule frag;
+    CodeGenModule vert;
+  };
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -287,11 +280,17 @@ class lava::Consumer : public SemaConsumer
   using super = SemaConsumer;
 
 public:
-  Consumer(CompilerInstance &CI, StringRef file, ShaderContext& ctx)
+  Consumer(CompilerInstance &CI,
+           StringRef file,
+           TargetCapabilities capabilities,
+           std::function<ModuleBuilder()> moduleBuilderFactory)
   : _ci(CI)
   , _file(file)
-  , _ctx(ctx)
+  , _capabilities(std::move(capabilities))
+  , _moduleBuilderFactory(std::move(moduleBuilderFactory))
   { }
+
+  const TranslatedModules& modules() const { return _modules; }
 
 private:
   void HandleTranslationUnit(ASTContext& Context) override
@@ -309,55 +308,42 @@ private:
     _ctx.functions = gather.emittedFunctions();
 
     // Remove entry points, they need special generation
-    _ctx.functions.erase(std::remove_if(_ctx.functions.begin(), _ctx.functions.end(), [this] (const EmittedFunction& f)
-                                        {
-                                          return f.decl == _ctx.vertexFunction || f.decl == _ctx.fragmentFunction;
-                                        }),
-                         _ctx.functions.end());
+//    _ctx.functions.erase(std::remove_if(_ctx.functions.begin(), _ctx.functions.end(), [this] (const EmittedFunction& f)
+//                                        {
+//                                          return f.decl == _ctx.vertexFunction || f.decl == _ctx.fragmentFunction;
+//                                        }),
+//                         _ctx.functions.end());
 
-    for(const auto& func : _ctx.functions)
+//    for(const auto& func : _ctx.functions)
+//    {
+//      func.decl->getNameForDiagnostic(llvm::errs(), _ci.getASTContext().getPrintingPolicy(), true);
+//      llvm::errs() << '\n';
+//      func.decl->dump();
+//    }
+
+
+    auto generateModule = [this] (ShaderStage stage)
     {
-      func.decl->getNameForDiagnostic(llvm::errs(), _ci.getASTContext().getPrintingPolicy(), true);
-      llvm::errs() << '\n';
-      func.decl->dump();
-    }
+      auto moduleBuilder = _moduleBuilderFactory();
+      if(buildModule(_ci.getASTContext(), _ctx, moduleBuilder, stage))
+        return moduleBuilder.reset();
+      return CodeGenModule{};
+    };
 
-//    _ctx.vertexFunction->getNameForDiagnostic(llvm::errs(), _ci.getASTContext().getPrintingPolicy(), true);
-//    llvm::errs() << '\n';
-//    _ctx.vertexFunction->dump();
+    auto maybeGenerateModule = [generateModule] (FunctionDecl* entryPoint, ShaderStage stage)
     {
-      // GLSL
-      auto module = glsl::createModuleBuilder(_ci.getASTContext());
-      buildModule(_ci.getASTContext(), _ctx, module, ShaderStage::vertex);
-      llvm::errs() << module.moduleContent();
-    }
-    llvm::errs() << "====================\n";
+      return entryPoint ? generateModule(stage) : CodeGenModule{};
+    };
+
+    if(_capabilities.supportsMultistageModules)
     {
-      // SPIR-V
-      spv::Parameterize();
-      GLSL_STD_450::GetDebugNames(GlslStd450DebugNames);
-      auto module = spirv::createModuleBuilder(_ci.getASTContext());
-      buildModule(_ci.getASTContext(), _ctx, module, ShaderStage::vertex);
-      printSpirv(module.moduleContent());
+      _modules.merged = generateModule(ShaderStage::all);
     }
-
-    printEntry("vert", _ctx.vertexFunction);
-    printEntry("frag", _ctx.fragmentFunction);
-  }
-
-  void printSpirv(const std::string& string)
-  {
-    auto spirv = std::vector<unsigned>{};
-    spirv.resize(string.size() / sizeof(unsigned));
-    std::memcpy(&spirv[0], string.data(), string.size());
-    printSpirv(spirv);
-  }
-
-  void printSpirv(const std::vector<unsigned>& spirv)
-  {
-    std::ostringstream disassembly;
-    spv::Disassemble(disassembly, spirv);
-    llvm::errs() << disassembly.str();
+    else
+    {
+      _modules.frag = maybeGenerateModule(_ctx.fragmentFunction, ShaderStage::fragment);
+      _modules.vert = maybeGenerateModule(_ctx.vertexFunction, ShaderStage::vertex);
+    }
   }
 
   void printEntry(llvm::StringRef name, NamedDecl* decl)
@@ -379,25 +365,88 @@ private:
     llvm::errs() << '\n';
   }
 
+  ShaderContext _ctx;
+  TranslatedModules _modules;
   CompilerInstance& _ci;
   StringRef _file;
-  ShaderContext& _ctx;
+  TargetCapabilities _capabilities;
+  std::function<ModuleBuilder()> _moduleBuilderFactory;
 };
 
+////////////////////////////////////////////////////////////////////////////////
+// CodeGenAction
+//
 
-Action::Action(ShaderContext& shaderContext)
-: _shaderContext(shaderContext)
+CodeGenAction::CodeGenAction(const Target& target, OutputOptions outOpts, lava::CodeGenOptions cgOpts)
+: _target(target)
+, _outOpts(std::move(outOpts))
+, _cgOpts(std::move(cgOpts))
 {
-}
-
-bool Action::BeginInvocation(CompilerInstance &CI)
-{
-  CI.getLangOpts() = DefaultLangOptions();
-  return super::BeginInvocation(CI);
 }
 
 std::unique_ptr<ASTConsumer>
-Action::CreateASTConsumer(CompilerInstance &CI, StringRef file)
+CodeGenAction::CreateASTConsumer(CompilerInstance &CI, StringRef file)
 {
-  return llvm::make_unique<Consumer>(CI, file, _shaderContext);
+  // Normally this is where all other FrontendActions generate their
+  // file streams but we don't know how many files we need, so we have to
+  // delegate this to EndSoureFileAction.
+  return llvm::make_unique<Consumer>(CI, file, _target.capabilities(), [this]
+  {
+    return _target.makeModuleBuilder(getCompilerInstance().getASTContext(), {});
+  });
+}
+
+void CodeGenAction::EndSourceFileAction()
+{
+  auto& ci = getCompilerInstance();
+  if(!ci.hasASTConsumer())
+    return;
+  if(ci.getDiagnostics().hasErrorOccurred())
+    return;
+
+  auto& modules = static_cast<Consumer&>(getCompilerInstance().getASTConsumer()).modules();
+
+  SmallString<128> out{ci.getFrontendOpts().OutputFile.begin(), ci.getFrontendOpts().OutputFile.end()};
+
+  std::function<void(StringRef ext, const CodeGenModule&)> streamer;
+  if(out != "-")
+  {
+    llvm::sys::path::append(out, llvm::sys::path::filename(getCurrentFile()));
+    llvm::sys::path::replace_extension(out, "");
+
+    streamer = [&out, &ci] (StringRef ext, const CodeGenModule& module)
+    {
+      auto file = out;
+      llvm::sys::path::replace_extension(file, ext);
+      if(auto* stream = ci.createOutputFile(file, true, true, "", "", true, true))
+      {
+        (*stream) << module;
+      }
+    };
+  }
+  else if(auto* stream = ci.createDefaultOutputFile(true, "", ""))
+  {
+    streamer = [stream] (StringRef, const CodeGenModule& module)
+    {
+      (*stream) << module;
+    };
+  }
+  if(streamer)
+  {
+    if(modules.merged)
+    {
+      streamer(_outOpts.fileExt, modules.merged);
+    }
+    else
+    {
+      if(modules.vert)
+      {
+        streamer(_outOpts.fileExtVertex, modules.vert);
+      }
+      if(modules.frag)
+      {
+        streamer(_outOpts.fileExtFragment, modules.frag);
+      }
+    }
+  }
 }

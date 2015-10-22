@@ -14,7 +14,6 @@
 #define LLVM_CLANG_LAVA_MODULEBUILDER_GLSL_H
 
 #include "clang/AST/ASTContext.h"
-#include "clang/AST/Mangle.h"
 #include "clang/AST/Type.h"
 #include "clang/Lava/GLSL.h"
 #include "clang/lava/IndentWriter.h"
@@ -43,10 +42,10 @@ namespace clang
 class clang::lava::glsl::TypeNamePrinter
 {
 public:
-  TypeNamePrinter(ASTContext& ast)
-  : _mangler(ItaniumMangleContext::create(ast, ast.getDiagnostics()))
-  {
-  }
+  TypeNamePrinter(ASTContext& ast);
+  TypeNamePrinter(TypeNamePrinter&&);
+  TypeNamePrinter& operator=(TypeNamePrinter&&);
+  ~TypeNamePrinter();
 
   void printTypeName(QualType type, IndentWriter& w);
   void printFunctionName(FunctionDecl& decl, IndentWriter& w);
@@ -168,7 +167,7 @@ class clang::lava::glsl::ModuleBuilder
 public:
   ModuleBuilder(ASTContext& ast);
 
-  std::string moduleContent();
+  std::string reset();
 
   template<class Director>
   bool buildRecord(QualType type, Director director);
@@ -192,6 +191,7 @@ private:
   } _functions;
 
   TypeNamePrinter _typeNamePrinter;
+  ASTContext* _ast;
 };
 
 #endif // LLVM_CLANG_LAVA_MODULEBUILDER_GLSL_H

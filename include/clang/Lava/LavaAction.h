@@ -17,47 +17,45 @@
 
 #include "clang/Basic/LangOptions.h"
 #include "clang/Frontend/FrontendAction.h"
-#include "clang/Lava/ShaderContext.h"
+#include "clang/Lava/CodeGen.h"
 
 namespace clang
 {
 
 namespace lava
 {
-  class Action;
   class Consumer;
+  class CodeGenAction;
   class EntryPointVisitor;
   class GatheringVisitor;
-  class TestAction;
+  struct OutputOptions;
 
-  struct ShaderContext;
-
-  LangOptions DefaultLangOptions();
+  class Target;
 
 } // end namespace lava
 } // end namespace clang
 
-class clang::lava::Action : public ASTFrontendAction
+struct clang::lava::OutputOptions
+{
+  std::string fileExt;
+  std::string fileExtFragment;
+  std::string fileExtVertex;
+};
+
+class clang::lava::CodeGenAction : public ASTFrontendAction
 {
   using super = ASTFrontendAction;
   
 public:
-  Action(ShaderContext& shaderContext);
+  CodeGenAction(const Target& target, OutputOptions outOpts, CodeGenOptions cgOpts);
 
-  bool BeginInvocation(CompilerInstance &CI) override;
+  void EndSourceFileAction() override;
   std::unique_ptr<ASTConsumer> CreateASTConsumer(CompilerInstance &CI, StringRef file) override;
 
 private:
-  ShaderContext& _shaderContext;
-};
-
-class clang::lava::TestAction : public Action
-{
-public:
-  TestAction() : Action(_shaderContext) { }
-
-private:
-  ShaderContext _shaderContext;
+  const Target& _target;
+  const OutputOptions _outOpts;
+  const CodeGenOptions _cgOpts;
 };
 
 #endif // LLVM_CLANG_LAVA_LAVAFRONTENDACTION_H

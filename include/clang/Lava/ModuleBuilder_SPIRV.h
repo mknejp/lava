@@ -69,19 +69,19 @@ namespace clang
 class clang::lava::spirv::TypeCache
 {
 public:
-  TypeCache(spv::Builder& builder) : _builder(builder) { }
+  TypeCache(spv::Builder& builder) : _builder(&builder) { }
 
   void add(CXXRecordDecl* decl, Id id);
   Id get(QualType type) const;
   Id getPointer(QualType type, spv::StorageClass storage) const;
   Id operator[](QualType type) const { return get(type); }
 
-  spv::Builder& builder() const { return _builder; }
+  spv::Builder& builder() const { return *_builder; }
 
 private:
   // spv::Builder does not cache struct types in makeStructType()
   llvm::DenseMap<CXXRecordDecl*, Id> _builtRecords;
-  spv::Builder& _builder;
+  spv::Builder* _builder;
 };
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -541,9 +541,9 @@ private:
 class clang::lava::spirv::ModuleBuilder
 {
 public:
-  ModuleBuilder(ASTContext& ast);
-
-  std::string moduleContent();
+  ModuleBuilder(ASTContext& ast, Options opts);
+  
+  std::string reset();
 
   template<class Director>
   bool buildRecord(QualType type, Director director);
@@ -551,10 +551,11 @@ public:
   bool buildFunction(FunctionDecl& decl, Director director);
 
 private:
-  ASTContext& _ast;
+  ASTContext* _ast;
   spv::Builder _builder{0};
   TypeCache _types{_builder};
   TypeMangler _mangler;
+  Options _opts;
 };
 
 #endif // LLVM_CLANG_LAVA_MODULEBUILDER_SPIRV_H

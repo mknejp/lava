@@ -13,6 +13,7 @@
 #ifndef LLVM_CLANG_LAVA_MODULEBUILDER_H
 #define LLVM_CLANG_LAVA_MODULEBUILDER_H
 
+#include "clang/lava/CodeGen.h"
 #include "clang/lava/ShaderContext.h"
 #include "llvm/ADT/APSInt.h"
 #include <memory>
@@ -35,12 +36,12 @@ namespace clang
     class ModuleBuilder;
     class RecordBuilder;
     class StmtBuilder;
+    class CodeGenModule;
 
     template<class Target, class Builder>
     struct DirectorInvoker;
 
-    bool buildModule(ASTContext& ast, ShaderContext& context, ModuleBuilder& builder, ShaderStage stage);
-
+    bool buildModule(ASTContext& ast, ShaderContext& context, ModuleBuilder& builder, ShaderStage stages);
   } // end namespace lava
 } // end namespace clang
 
@@ -573,8 +574,10 @@ public:
     auto f = FunctionDirector{std::forward<F>(director)};
     return _target->buildFunction(decl, f);
   }
-  // Can be text or binary and is the full module content to be written to a file
-  auto moduleContent() -> std::string { return _target->moduleContent(); }
+  /// Retrieve the finished module content.
+  ///
+  /// This resets the ModuleBuilder so it can build a new module
+  auto reset() -> CodeGenModule { return _target->reset(); }
 
 private:
   class Concept
@@ -584,7 +587,7 @@ private:
 
     virtual auto buildRecord(QualType type, RecordDirector& director) -> bool = 0;
     virtual auto buildFunction(FunctionDecl& decl, FunctionDirector& director) -> bool = 0;
-    virtual auto moduleContent() -> std::string = 0;
+    virtual auto reset() -> CodeGenModule = 0;
   };
 
   template<class T>
@@ -612,7 +615,7 @@ public:
     return _target.buildFunction(decl, DirectorInvoker<T, FunctionBuilder>{_target, director});
   }
 
-  auto moduleContent() -> std::string override { return _target.moduleContent(); }
+  auto reset() -> CodeGenModule override { return {_target.reset()}; }
 
   T _target;
 };

@@ -19,6 +19,7 @@
 #include "clang/Basic/Diagnostic.h"
 #include "clang/Basic/DiagnosticOptions.h"
 #include "clang/Basic/SourceManager.h"
+#include "clang/Basic/TargetInfo.h"
 #include "clang/Format/Format.h"
 #include "clang/Frontend/CompilerInstance.h"
 #include "clang/Frontend/CompilerInvocation.h"
@@ -27,7 +28,11 @@
 #include "clang/Frontend/TextDiagnosticPrinter.h"
 #include "clang/Frontend/Utils.h"
 #include "clang/FrontendTool/Utils.h"
+#include "clang/Lava/CodeGen.h"
+#include "clang/Lava/GLSL.h"
 #include "clang/Lava/LavaAction.h"
+#include "clang/Lava/ShaderContext.h"
+#include "clang/Lava/SPIRV.h"
 #include "clang/Tooling/CommonOptionsParser.h"
 #include "clang/Tooling/Tooling.h"
 #include "llvm/ADT/Statistic.h"
@@ -43,19 +48,36 @@
 #include "llvm/Support/raw_ostream.h"
 #include "Version.h"
 
+#include <iostream>
+
 namespace cl = llvm::cl;
 using namespace clang;
 using namespace clang::tooling;
 
-namespace {
+namespace
+{
+  ////////////////////////////////////////////////////////////////////////////////
+  // Builtin Targets
+
+  auto glsl =
+  {
+    lava::TargetRegistryEntry<lava::glsl::Plugin>{lava::glsl::Version::glsl_300_es}
+  };
+  auto spirv =
+  {
+    lava::TargetRegistryEntry<lava::spirv::Plugin>{lava::spirv::Version::spv_100}
+  };
 
   // All options must belong to locally defined categories for them to get shown
   // by -help. We explicitly hide everything else (except -help and -version).
-  cl::OptionCategory LavaCategory("Lava Options");
+  cl::OptionCategory GeneralCategory("General Options");
   cl::OptionCategory LanguageCategory("Language Options");
+  cl::OptionCategory OutputCategory("Output Options");
+  cl::OptionCategory CodeGenCategory("CodeGen Options");
 
-  const cl::OptionCategory *VisibleCategories[] = {
-    &LavaCategory, &LanguageCategory,
+  std::vector<cl::OptionCategory*> VisibleCategories
+  {
+    &GeneralCategory, &LanguageCategory, &OutputCategory, &CodeGenCategory
   };
 
 //  static cl::extrahelp CommonHelp(CommonOptionsParser::HelpMessage);
@@ -89,110 +111,108 @@ namespace {
   "\n"
   ;
 
-  ////////////////////////////////////////////////////////////////////////////////
-  /// Lanugage Options
+  // TODO: options with cl::ReallyHidden are not implemented yet and their names/descriptions may change
 
-  cl::opt<std::string> Includes("I",
-                                cl::desc("Add directory to include search path"),
-                                cl::value_desc("value"),
-                                cl::ZeroOrMore,
-                                cl::Prefix,
-                                cl::cat(LanguageCategory));
-  cl::opt<std::string> Defines("D",
-//                               cl::desc("Define a preprocessor token"),
+  //////////////////////////////////////////////////////////////////////////////
+  // General Options
+
+  cl::list<std::string> SourcePaths(cl::Positional,
+                                    cl::desc("<inputs>"),
+                                    cl::ZeroOrMore,
+                                    cl::cat(GeneralCategory));
+
+  //////////////////////////////////////////////////////////////////////////////
+  // Language Options
+
+  cl::list<std::string> HeaderSearchPaths("I",
+                                          cl::desc("Add directory to include search paths"),
+                                          cl::value_desc("dir"),
+                                          cl::ZeroOrMore,
+                                          cl::Prefix,
+                                          cl::cat(LanguageCategory));
+  cl::list<std::string> Macros("D",
+                               cl::desc("Define a preprocessor token"),
                                cl::value_desc("name"),
                                cl::ZeroOrMore,
                                cl::Prefix,
-                               cl::Hidden,
                                cl::cat(LanguageCategory));
-  cl::opt<std::string> Undefines("U",
-//                                 cl::desc("Undefine a preprocessor token"),
-                                 cl::value_desc("name"),
-                                 cl::ZeroOrMore,
-                                 cl::Prefix,
-                                 cl::Hidden,
-                                 cl::cat(LanguageCategory));
 
-  ////////////////////////////////////////////////////////////////////////////////
-  /// General Options
+  //////////////////////////////////////////////////////////////////////////////
+  // CodeGen Options
 
-  cl::list<std::string> SourcePaths(cl::Positional,
-                                    cl::desc("[<sources>...]"),
-                                    cl::ZeroOrMore/*,
-                                    cl::cat(LavaCategory)*/);
-
-//  cl::opt<bool> FinalSyntaxCheck("final-syntax-check",
-//                                 cl::desc("Check for correct syntax after applying transformations"),
-//                                 cl::init(false));
-//
-//  cl::opt<bool> SummaryMode("summary", cl::desc("Print transform summary"),
-//                            cl::init(false), cl::cat(GeneralCategory));
-//
-//  cl::opt<std::string>
-//  TimingDirectoryName("perf",
-//                      cl::desc("Capture performance data and output to specified "
-//                               "directory. Default: ./migrate_perf"),
-//                      cl::ValueOptional, cl::value_desc("directory name"),
-//                      cl::cat(GeneralCategory));
-//
-//  cl::opt<std::string> SupportedCompilers("for-compilers", cl::value_desc("string"),
-//                                          cl::desc("Select transforms targeting the intersection of\n"
-//                                                   "language features supported by the given compilers.\n"
-//                                                   "Takes a comma-separated list of <compiler>-<version>.\n"
-//                                                   "\t<compiler> can be any of: clang, gcc, icc, msvc\n"
-//                                                   "\t<version> is <major>[.<minor>]\n"),
-//                                          cl::cat(GeneralCategory));
-
-  ////////////////////////////////////////////////////////////////////////////////
-  /// GLSL Options
-
-//  cl::opt<unsigned> EsslVersion("essl",
-//                                cl::desc("Selects the GLSL ES code generator.\n"
-//                                         "The value specifies the GLSL ES #version to generate for."),
-//                                cl::Optional,
-//                                cl::cat(LavaCategory));
-//  cl::opt<unsigned> GlslVersion("glsl",
-//                                cl::desc("Selects the GLSL code generator.\n"
-//                                         "The value specifies the GLSL #version to generate for."),
-//                                cl::Optional,
-//                                cl::cat(LavaCategory));
-  cl::opt<std::string> EsslVersion("target",
-                                   cl::desc("Selects the target to generate code for."),
+  cl::opt<const lava::TargetPlugin*> Target("target",
+                                            cl::desc("Select the target to generate code for (required)"),
+                                            cl::Required,
+                                            cl::cat(CodeGenCategory));
+  cl::opt<bool> NoStrip("no-strip",
+                        cl::desc("Do not remove unused internal symbols"),
+                        cl::init(false),
+                        cl::Optional,
+                        cl::ReallyHidden,
+                        cl::cat(CodeGenCategory));
+  cl::opt<bool> NoSource("no-source-info",
+                         cl::desc("Do not keep source code referencing information"),
+                         cl::init(false),
+                         cl::Optional,
+                         cl::ReallyHidden,
+                         cl::cat(CodeGenCategory));
+  cl::opt<bool> NoNames("no-names-info",
+                        cl::desc("Remove or obfuscate names of internal symbols"),
+                        cl::init(false),
+                        cl::Optional,
+                        cl::ReallyHidden,
+                        cl::cat(CodeGenCategory));
+  cl::opt<lava::ShaderStage> Stage("stage",
+                                   cl::desc("Generate only a single shader stage"),
+                                   cl::ReallyHidden,
                                    cl::Optional,
-                                   cl::cat(LavaCategory));
+                                   cl::values(clEnumValN(lava::ShaderStage::vertex, "vert", "Vertex"),
+                                              clEnumValN(lava::ShaderStage::fragment, "frag", "Fragment"),
+                                              clEnumValEnd),
+                                   cl::cat(CodeGenCategory));
 
-  ////////////////////////////////////////////////////////////////////////////////
-  /// Output Options
+  //////////////////////////////////////////////////////////////////////////////
+  // Output Options
 
   cl::opt<std::string> Output("o",
-                              cl::desc("Specifies the output directory for the generated shader stage files."),
+                              cl::desc("Write output to this directory (required)"),
+                              cl::value_desc("dir"),
+                              cl::ValueRequired,
                               cl::Optional,
-                              cl::cat(LavaCategory));
-  cl::opt<std::string> ExtCompute("ext-comp",
-                                  cl::desc("The extension to append to compute shader output files (default 'comp')."),
-                                  cl::init("comp"),
-                                  cl::Optional,
-                                  cl::cat(LavaCategory));
+                              cl::init("."),
+                              cl::cat(OutputCategory));
+
   cl::opt<std::string> ExtFragment("ext-frag",
-                                   cl::desc("The extension to append to fragment shader output files (default 'frag')."),
+                                   cl::desc("The extension to append to fragment shader output files (default 'frag')"),
                                    cl::init("frag"),
                                    cl::Optional,
-                                   cl::cat(LavaCategory));
+                                   cl::cat(OutputCategory));
   cl::opt<std::string> ExtVertex("ext-vert",
-                                 cl::desc("The extension to append to vertex shader output files (default 'vert')."),
+                                 cl::desc("The extension to append to vertex shader output files (default 'vert')"),
                                  cl::init("vert"),
                                  cl::Optional,
-                                 cl::cat(LavaCategory));
+                                 cl::cat(OutputCategory));
+  cl::opt<std::string> Extension("ext",
+                                 cl::desc("The extension to append to output files (default is derived from -target)"),
+                                 cl::Optional,
+                                 cl::cat(OutputCategory));
   cl::opt<bool> StripExt("strip-ext",
-                         cl::desc("If specified the input file extension is stripped before appending the stage specific extension."),
+                         cl::desc("Strip the input file extension before appending the stage and target specific extensions"),
                          cl::init(false),
-                         cl::cat(LavaCategory));
+                         cl::ReallyHidden,
+                         cl::cat(OutputCategory));
+  cl::opt<bool> SplitStages("split-stages",
+                            cl::desc("Split the result into one file per shader stage if the target builds multistage files by default"),
+                            cl::init(false),
+                            cl::ReallyHidden,
+                            cl::cat(OutputCategory));
+  
+  //////////////////////////////////////////////////////////////////////////////
 
-  ////////////////////////////////////////////////////////////////////////////////
-
-  void printVersion() {
+  void printVersion()
+  {
     llvm::outs() << "Lava version " << LAVA_VERSION_STRING
-                 << " (based on Clang version " << CLANG_VERSION_STRING
+                 << " (based on Clang " << CLANG_VERSION_STRING
                  << ")\n";
   }
 
@@ -283,40 +303,129 @@ namespace {
 //    return !Success;
 //  }
 
+  void addTargetCmdArgs()
+  {
+    lava::forEachRegisteredTarget([] (const lava::TargetPlugin& target)
+    {
+      for(auto* category : target.registerCommandLineArguments())
+        VisibleCategories.push_back(category);
+    });
+    std::sort(VisibleCategories.begin(), VisibleCategories.end());
+    VisibleCategories.erase(std::unique(VisibleCategories.begin(), VisibleCategories.end()),
+                            VisibleCategories.end());
+  }
+
+  void addTargetsToHelp()
+  {
+    std::vector<const lava::TargetPlugin*> targets;
+    std::transform(lava::TargetRegistry::begin(),
+                   lava::TargetRegistry::end(),
+                   std::back_inserter(targets),
+                   [] (const lava::TargetPlugin& target)
+                   {
+                     return &target;
+                   });
+    std::sort(targets.begin(), targets.end(), [] (const lava::TargetPlugin* a, const lava::TargetPlugin* b)
+              {
+                return a->name() < b->name();
+              });
+    std::for_each(targets.begin(), targets.end(), [] (const lava::TargetPlugin* target)
+    {
+      Target.getParser().addLiteralOption(target->name().data(), target, target->desc().data());
+    });
+  }
+
+  void handleCommandLine(int argc, const char **argv)
+  {
+    addTargetsToHelp();
+    addTargetCmdArgs();
+    cl::HideUnrelatedOptions(VisibleCategories);
+    cl::SetVersionPrinter(&printVersion);
+    if(argc == 1)
+    {
+      cl::PrintHelpMessage(false, true);
+    }
+    cl::ParseCommandLineOptions(argc, argv, Overview);
+    if(SourcePaths.getNumOccurrences() > 1 && Output == "-")
+    {
+      Output.error("cannot print to console with multiple input files");
+      exit(1);
+    }
+  }
+
+  void configurePreprocessorOptions(PreprocessorOptions& opts)
+  {
+    std::transform(Macros.begin(),
+                   Macros.end(),
+                   std::back_inserter(opts.Macros),
+                   [] (const std::string& macro)
+                   {
+                     return std::make_pair(macro, false);
+                   });
+  }
+
+  void configureHeaderSearchOptions(HeaderSearchOptions& opts)
+  {
+    for(auto& path : HeaderSearchPaths)
+    {
+      opts.AddPath(path, frontend::IncludeDirGroup::Angled, false, true);
+    }
+  }
+
+  void configureFrontendOptions(FrontendOptions& opts)
+  {
+    std::transform(SourcePaths.begin(),
+                   SourcePaths.end(),
+                   std::back_inserter(opts.Inputs), [] (StringRef source)
+                   {
+                     return FrontendInputFile{getAbsolutePath(source), InputKind::IK_CXX};
+                   });
+    opts.OutputFile = Output;
+  }
+
+  lava::OutputOptions outputOptions()
+  {
+    lava::OutputOptions opts;
+    opts.fileExt = Extension.getNumOccurrences() > 0 ? Extension : Target->extension();
+    opts.fileExtFragment = ExtFragment + "." + opts.fileExt;
+    opts.fileExtVertex = ExtVertex + "." + opts.fileExt;
+    return opts;
+  }
+
+  lava::CodeGenOptions codeGenOptions()
+  {
+    return {};
+  }
 }
 
-int main(int argc_, const char **argv_) {
+int main(int argc, const char* argv[])
+{
   llvm::sys::PrintStackTraceOnErrorSignal();
-  llvm::PrettyStackTraceProgram X(argc_, argv_);
+  llvm::PrettyStackTraceProgram X(argc, argv);
 
   if (llvm::sys::Process::FixupStandardFileDescriptors())
     return 1;
 
-  /*
-  SmallVector<const char *, 256> argv;
-  llvm::SpecificBumpPtrAllocator<char> ArgAllocator;
-  std::error_code EC = llvm::sys::Process::GetArgumentVector(argv, llvm::makeArrayRef(argv_, argc_), ArgAllocator);
-  if (EC) {
-    llvm::errs() << "error: couldn't get arguments: " << EC.message() << '\n';
+  handleCommandLine(argc, argv);
+
+  CompilerInstance compiler;
+  compiler.createDiagnostics();
+  compiler.getTargetOpts().Triple = llvm::sys::getProcessTriple();
+  compiler.getLangOpts() = lava::langOptions();
+  configureFrontendOptions(compiler.getFrontendOpts());
+  configureHeaderSearchOptions(compiler.getHeaderSearchOpts());
+  configurePreprocessorOptions(compiler.getPreprocessorOpts());
+
+  auto target = Target->targetFromCommandLineArguments();
+  lava::CodeGenAction action{*target, outputOptions(), codeGenOptions()};
+  if(compiler.ExecuteAction(action))
+  {
+    compiler.clearOutputFiles(false);
+    return 0;
+  }
+  else
+  {
+    compiler.clearOutputFiles(true);
     return 1;
   }
-*/
-  cl::HideUnrelatedOptions(llvm::makeArrayRef(VisibleCategories));
-  cl::SetVersionPrinter(&printVersion);
-
-
-  CommonOptionsParser op(argc_, argv_, LavaCategory, Overview);
-  ClangTool tool(op.getCompilations(), op.getSourcePathList());
-  return tool.run(newFrontendActionFactory<lava::TestAction>().get());
-
-//  std::vector<std::unique_ptr<ASTUnit>> ASTs;
-//  tool.buildASTs(ASTs);
-  // Parse options and generate compilations.
-//  std::unique_ptr<CompilationDatabase> Compilations(FixedCompilationDatabase::loadFromCommandLine(argc_, argv_));
-//  cl::ParseCommandLineOptions(argc_, argv_, Overview);
-
-//  return lava_main(argv);
-
-
-//  return 0;
 }
